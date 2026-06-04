@@ -1,0 +1,256 @@
+{
+  "slug": "cau-network-auto-reconnect",
+  "category": "项目",
+  "date": "2026-06-04",
+  "title": "中国农业大学校园网断网自连工具",
+  "excerpt": "一个面向校园网门户的轻量自动恢复工具：定时检查是否在线，掉线后获取本机 IP、调用 Dr.COM 登录接口、解析 JSONP 返回，并把每次运行写进日志。",
+  "tags": [
+    "Python",
+    "Requests",
+    "Windows",
+    "Network",
+    "Automation",
+    "Reliability"
+  ],
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "项目定位"
+    },
+    {
+      "type": "paragraph",
+      "text": "这个项目解决的是一个很具体的问题：校园网认证掉线后，不希望手动打开认证页、输入账号、再点登录。工具会按周期检测当前是否还在线，如果认证态丢失，就自动走一次登录接口；如果已经在线，就只记录状态并退出。"
+    },
+    {
+      "type": "paragraph",
+      "text": "它不是做一个复杂 UI，也不是把浏览器自动化脚本挂在后台。实现上更像一个小型巡检任务：检查、判断、恢复、写日志，每一步都可以从源码和日志里追到。"
+    },
+    {
+      "type": "callout",
+      "title": "主要看点",
+      "text": "下面主要看几个地方：任务怎么定时启动、怎么判断是否在线、怎么拿本机 IP、怎么请求登录接口、怎么解析 JSONP、退出码和日志怎么帮助排查问题。"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "运行方式"
+    },
+    {
+      "type": "paragraph",
+      "text": "项目目录很小：一个 Python 主脚本、一个 Windows bat 启动脚本、一个已经打包好的 exe，以及持续追加的日志文件。bat 负责切到脚本目录、记录启动信息、调用 Python 单次执行，并把 stdout/stderr 全部追加到同一个日志里。"
+    },
+    {
+      "type": "code",
+      "language": "text",
+      "filename": "project-tree.txt",
+      "code": "断网自连-中国农业大学/\n  auto_connect_net.py      # 主逻辑：探测在线状态，必要时登录\n  run_auto_connect.bat     # Windows 计划任务入口，追加日志\n  auto_connect_net.exe     # 可分发执行文件\n  auto_connect_net.log     # 每次任务运行的证据"
+    },
+    {
+      "type": "paragraph",
+      "text": "实际运行日志显示任务按约 5 分钟的节奏被外部调度拉起。每次任务会先写入启动时间、当前目录和 Python 路径，再运行脚本，最后记录 exit code。这样出了问题不用猜：能看到是脚本没启动、路径错了、网络请求失败，还是认证接口返回失败。"
+    },
+    {
+      "type": "code",
+      "language": "bat",
+      "filename": "run_auto_connect.bat",
+      "code": "@echo off\nchcp 65001 >nul\nset \"APP_DIR=%~dp0\"\nif \"%PYTHON_EXE%\"==\"\" set \"PYTHON_EXE=python\"\ncd /d \"%APP_DIR%\"\n\necho ============================== >> \"auto_connect_net.log\"\necho [%date% %time%] task started >> \"auto_connect_net.log\"\necho current dir: %cd% >> \"auto_connect_net.log\"\necho python path: %PYTHON_EXE% >> \"auto_connect_net.log\"\n\n\"%PYTHON_EXE%\" \"auto_connect_net.py\" --mode single >> \"auto_connect_net.log\" 2>&1\n\necho exit code: %errorlevel% >> \"auto_connect_net.log\""
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "配置方式"
+    },
+    {
+      "type": "paragraph",
+      "text": "脚本没有把所有参数写死在逻辑里，而是允许通过环境变量覆盖门户地址、登录接口、请求超时、在线态 marker、账号和密码。这样同一份代码可以放到计划任务、OpenClaw 或普通命令行里运行，只要外部注入不同配置即可。"
+    },
+    {
+      "type": "code",
+      "language": "python",
+      "filename": "auto_connect_net.py",
+      "code": "SCHOOL_WEB_URL = os.getenv(\"NET_PORTAL_URL\", \"http://10.3.38.8/\")\nLOGIN_API_URL = os.getenv(\"NET_LOGIN_API_URL\", \"http://10.3.38.8/drcom/login\")\nREQUEST_TIMEOUT = float(os.getenv(\"NET_REQUEST_TIMEOUT\", \"5\"))\n\nLOGIN_SUCCESS_MARKERS = [\n    marker.strip()\n    for marker in os.getenv(\"NET_LOGIN_SUCCESS_MARKERS\", \"注销,logout\").split(\",\")\n    if marker.strip()\n]\n\nUSERNAME = os.getenv(\"NET_USERNAME\", \"<NET_USERNAME>\")\nPASSWORD = os.getenv(\"NET_PASSWORD\", \"<NET_PASSWORD>\")"
+    },
+    {
+      "type": "paragraph",
+      "text": "凭据由外部环境注入，而不是让脚本承担密钥管理。源码里只保留空值默认配置，真正部署时通过 NET_USERNAME、NET_PASSWORD 等环境变量覆盖。"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "在线态探测"
+    },
+    {
+      "type": "paragraph",
+      "text": "校园网认证页本身就能给出状态信号。脚本请求门户首页，抽取 HTML title，再用一组 marker 判断是否已经在线。默认 marker 同时支持中文“注销”和英文 logout，这样门户标题的中英文变化不会让脚本立刻失效。"
+    },
+    {
+      "type": "code",
+      "language": "python",
+      "filename": "auto_connect_net.py",
+      "code": "def check_login_title() -> str:\n    try:\n        response = requests.get(SCHOOL_WEB_URL, timeout=REQUEST_TIMEOUT)\n        match = re.search(r\"<title>(.*?)</title>\", response.text, flags=re.S | re.I)\n        if not match:\n            return \"\"\n        return match.group(1).strip()\n    except requests.RequestException:\n        return \"\"\n\n\ndef is_logged_in(title: str) -> bool:\n    if not title:\n        return False\n    title_l = title.lower()\n    return any(marker.lower() in title_l for marker in LOGIN_SUCCESS_MARKERS)"
+    },
+    {
+      "type": "paragraph",
+      "text": "这一步没有直接 ping 外网，因为认证页更接近真实目标：能访问认证页但不代表已认证，title 里出现“注销/logout”才说明门户认为当前客户端处在登录态。"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "本机 IP 获取"
+    },
+    {
+      "type": "paragraph",
+      "text": "Dr.COM 登录接口需要带上 v4ip。脚本用 UDP socket 连接 8.8.8.8:80 来获取本机出口 IP，这个操作不会真的发送 HTTP 请求，只是利用系统路由表让内核选择一个本地地址。拿不到 IP 时，登录会直接中止。"
+    },
+    {
+      "type": "code",
+      "language": "python",
+      "filename": "auto_connect_net.py",
+      "code": "def get_local_ip() -> str:\n    try:\n        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\n        sock.connect((\"8.8.8.8\", 80))\n        ip = sock.getsockname()[0]\n        sock.close()\n        return ip\n    except OSError:\n        return \"\""
+    },
+    {
+      "type": "paragraph",
+      "text": "这个实现比解析 ipconfig 输出更稳：不用处理中文网卡名、虚拟网卡、字段换行，也不用靠字符串匹配猜哪个 IPv4 才是校园网实际出口。"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "登录请求"
+    },
+    {
+      "type": "paragraph",
+      "text": "登录不是浏览器自动点击，而是直接调用认证接口。请求参数里保留了 Dr.COM 门户需要的 callback、DDDDD、upass、v4ip、terminal_type、lang、jsVersion 和时间戳等字段。核心点是：只有确认不在线时才发登录请求，避免计划任务每次唤醒都重复冲接口。"
+    },
+    {
+      "type": "code",
+      "language": "python",
+      "filename": "auto_connect_net.py",
+      "code": "def login() -> bool:\n    ip = get_local_ip()\n    if not ip:\n        log(\"cannot get local IP, login aborted\")\n        return False\n\n    if not USERNAME or not PASSWORD:\n        log(\"username or password is empty, check NET_USERNAME / NET_PASSWORD\")\n        return False\n\n    params = {\n        \"callback\": \"dr1003\",\n        \"DDDDD\": USERNAME,\n        \"upass\": PASSWORD,\n        \"0MKKey\": \"123456\",\n        \"R1\": \"0\",\n        \"R2\": \"\",\n        \"R3\": \"0\",\n        \"R6\": \"0\",\n        \"para\": \"00\",\n        \"v4ip\": ip,\n        \"v6ip\": \"\",\n        \"terminal_type\": \"1\",\n        \"lang\": \"zh-cn\",\n        \"program_index\": \"<portal_program_index>\",\n        \"page_index\": \"<portal_page_index>\",\n        \"jsVersion\": \"4.2.2\",\n        \"v\": str(int(time.time())),\n    }\n\n    try:\n        response = requests.get(LOGIN_API_URL, params=params, timeout=REQUEST_TIMEOUT)\n        data = parse_jsonp_payload(response.text.strip())\n    except (requests.RequestException, ValueError, json.JSONDecodeError) as exc:\n        log(f\"login request failed: {exc}\")\n        return False\n\n    if str(data.get(\"result\")) == \"1\":\n        log(\"login success\")\n        return True\n\n    log(f\"login failed, server returned: {data}\")\n    return False"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "JSONP 解析"
+    },
+    {
+      "type": "paragraph",
+      "text": "这个认证接口返回的不是纯 JSON，而是类似 dr1003({...}) 的 JSONP。脚本没有用字符串 split 粗暴裁剪，而是用正则确认外层函数调用格式，再把括号内部交给 json.loads。格式不对会抛 ValueError，并进入失败日志。"
+    },
+    {
+      "type": "code",
+      "language": "python",
+      "filename": "auto_connect_net.py",
+      "code": "def parse_jsonp_payload(text: str) -> dict:\n    match = re.match(r\"^\\s*[A-Za-z0-9_]+\\((.*)\\)\\s*$\", text, flags=re.S)\n    if not match:\n        raise ValueError(f\"unexpected response format: {text[:120]}\")\n    payload = match.group(1)\n    return json.loads(payload)"
+    },
+    {
+      "type": "paragraph",
+      "text": "这类小判断很重要。校园网接口偶尔返回错误页、空响应或非预期内容，如果直接当 JSON 解析，日志里只会剩下模糊的异常；先校验 JSONP 外壳，失败原因会清楚很多。"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "单次任务与守护模式"
+    },
+    {
+      "type": "paragraph",
+      "text": "脚本提供两种运行模式：single 适合 Windows 计划任务或 OpenClaw 这种外部调度器，运行一次就退出；daemon 适合常驻进程，成功或已在线时按较长间隔睡眠，失败时按较短间隔重试。"
+    },
+    {
+      "type": "code",
+      "language": "python",
+      "filename": "auto_connect_net.py",
+      "code": "def run_once() -> Literal[\"already\", \"recovered\", \"failed\"]:\n    title = check_login_title()\n    if is_logged_in(title):\n        log(f\"already online (title: {title})\")\n        return \"already\"\n\n    log(\"not online, trying login\")\n    if login():\n        return \"recovered\"\n    return \"failed\"\n\n\ndef run_daemon(success_interval: int, failure_interval: int) -> int:\n    while True:\n        state = run_once()\n        sleep_seconds = success_interval if state != \"failed\" else failure_interval\n        log(f\"sleep {sleep_seconds}s before next check\")\n        time.sleep(sleep_seconds)"
+    },
+    {
+      "type": "code",
+      "language": "python",
+      "filename": "auto_connect_net.py",
+      "code": "def build_parser() -> argparse.ArgumentParser:\n    parser = argparse.ArgumentParser(\n        description=\"Campus network auto-login script (single-run or daemon mode).\"\n    )\n    parser.add_argument(\n        \"--mode\",\n        choices=[\"single\", \"daemon\"],\n        default=\"single\",\n        help=\"single: run once then exit; daemon: keep loop running\",\n    )\n    parser.add_argument(\"--success-interval\", type=int, default=300)\n    parser.add_argument(\"--failure-interval\", type=int, default=30)\n    return parser\n\n\ndef main() -> int:\n    args = build_parser().parse_args()\n    if args.mode == \"daemon\":\n        return run_daemon(args.success_interval, args.failure_interval)\n\n    state = run_once()\n    return 0 if state in {\"already\", \"recovered\"} else 1"
+    },
+    {
+      "type": "paragraph",
+      "text": "single 模式的退出码也参与调度判断：already 和 recovered 都返回 0，failed 返回 1。外部计划任务或监控工具可以直接根据退出码判断本次恢复是否成功。"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "日志证据"
+    },
+    {
+      "type": "paragraph",
+      "text": "日志不是装饰，它是这个项目能长期运行的关键。每轮输出都有时间戳、状态和退出码；如果门户 title 编码显示异常，也仍然能看到“已经在线”的判断结果。日志形态如下。"
+    },
+    {
+      "type": "code",
+      "language": "text",
+      "filename": "auto_connect_net.log",
+      "code": "==============================\n[周四 2026/06/04 23:21:01.85] task started\ncurrent dir: <project-dir>\npython path: <python-exe>\n2026-06-04 23:21:02 already online (title: <portal logout title>)\nexit code: 0\n==============================\n[周四 2026/06/04 23:26:01.84] task started\ncurrent dir: <project-dir>\npython path: <python-exe>\n2026-06-04 23:26:02 already online (title: <portal logout title>)\nexit code: 0"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "错误处理"
+    },
+    {
+      "type": "paragraph",
+      "text": "脚本把几类失败分开处理：获取不到本机 IP、账号密码为空、门户请求异常、登录请求异常、JSONP 格式不符合预期、服务器返回 result != 1。每种情况都会写出不同日志，而不是统一吞掉。"
+    },
+    {
+      "type": "list",
+      "items": [
+        "门户页请求失败：check_login_title 返回空字符串，随后进入登录恢复流程。",
+        "本机 IP 获取失败：login 直接中止，避免带空 v4ip 请求认证接口。",
+        "凭据为空：提示检查 NET_USERNAME / NET_PASSWORD。",
+        "JSONP 格式异常：记录 unexpected response format，说明接口返回不是预期回调结构。",
+        "认证失败：把服务端返回的 data 写入日志，便于区分密码错误、接口参数变化或门户限制。"
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "为什么不用浏览器自动化"
+    },
+    {
+      "type": "paragraph",
+      "text": "这个工具可以不用 Selenium 或 Playwright，是因为校园网登录页的本质是一个明确的 HTTP 接口。直接请求接口的稳定性更好：没有浏览器进程、没有页面加载等待、没有按钮 selector 变化，也更适合被计划任务按固定周期拉起。"
+    },
+    {
+      "type": "code",
+      "language": "text",
+      "filename": "network-flow.txt",
+      "code": "Windows Task Scheduler / OpenClaw\n  -> run_auto_connect.bat\n  -> python auto_connect_net.py --mode single\n  -> GET portal page\n  -> title contains logout marker ?\n       yes: log already online, exit 0\n       no : get local IPv4\n            -> GET Dr.COM login API with credentials + v4ip\n            -> parse JSONP\n            -> result == 1 ? exit 0 : exit 1\n  -> append log for the next diagnosis"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "工程取舍"
+    },
+    {
+      "type": "list",
+      "items": [
+        "用认证页 title 判断在线态，而不是只检查公网连通性。",
+        "用 UDP socket 获取出口 IPv4，避免解析 ipconfig 带来的本地化和多网卡问题。",
+        "用 requests 直接调用门户接口，不引入浏览器自动化的进程和 selector 成本。",
+        "把凭据、门户地址、超时和在线 marker 设计成环境变量覆盖，方便换机器或换调度器。",
+        "保留 single 和 daemon 两种模式，让脚本既能被计划任务拉起，也能作为常驻进程运行。",
+        "所有状态写入追加日志，排查问题时可以先看事实，而不是复现一次掉线现场。"
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "后面还想改"
+    },
+    {
+      "type": "list",
+      "items": [
+        "把账号密码默认值完全移出源码，改成 .env 或 Windows 凭据管理器读取。",
+        "在日志里增加 portal status、HTTP status code 和请求耗时，方便判断是网络慢还是认证失败。",
+        "给 parse_jsonp_payload、is_logged_in、run_once 写单元测试，避免门户返回格式变化时静默误判。",
+        "增加失败次数窗口，连续失败后触发桌面通知或邮件提醒。",
+        "把 Windows 调度配置整理成模板，迁移到不同机器时只需要改环境变量。"
+      ]
+    }
+  ]
+}

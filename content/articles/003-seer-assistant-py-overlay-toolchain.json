@@ -1,0 +1,416 @@
+{
+  "slug": "seer-assistant-py-overlay-toolchain",
+  "category": "项目",
+  "date": "2026-06-04",
+  "title": "赛小区：Python/PySide6 战斗信息悬浮框与社区工具链",
+  "excerpt": "一个围绕赛尔号 Unity 客户端构建的桌面辅助项目：用 Frida 读取客户端网络包，解析战斗状态，用 PySide6 做悬浮窗，并接上官网授权、策略建议和高段位对战记录。",
+  "tags": [
+    "Python",
+    "PySide6",
+    "Frida",
+    "Packet",
+    "Cloudflare",
+    "Supabase",
+    "Crypto",
+    "Desktop"
+  ],
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "项目定位"
+    },
+    {
+      "type": "paragraph",
+      "text": "这个项目是我给赛尔号 PC Unity 客户端做的一套战斗信息悬浮框和社区工具。它不是外部裸 socket 发包工具，也不是把游戏窗口套一层 UI；正式悬浮框读取的是本机客户端已经产生的网络包，把能确认的字段解析出来，再转换成给玩家判断用的窗口。"
+    },
+    {
+      "type": "paragraph",
+      "text": "我给它定的规则比较明确：包里能确认的字段才进入正式展示；包里隐藏或置零的字段不靠旧逻辑或模板补洞；策略建议只显示，不自动出招、换宠或用药；开发测试命令必须显式传参才会触发客户端内部方法。这样项目不会变成一堆临时脚本。"
+    },
+    {
+      "type": "callout",
+      "title": "主要看点",
+      "text": "下面按几个关键部分说明：怎么抓包、怎么解析、怎么更新状态、窗口怎么显示、资源怎么补、策略建议怎么请求、发布版怎么启动。"
+    },
+    {
+      "type": "image",
+      "src": "/assets/seer-assistant-battle-window.png",
+      "alt": "赛小区 PySide6 战斗悬浮窗截图",
+      "caption": "战斗悬浮窗截图：窗口里看到的是网络包解析后的战斗信息，背后对应 Frida capture、PacketProcessor、BattleService、StateStore 和 PySide6 UI 更新过程。"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "数据怎么进窗口"
+    },
+    {
+      "type": "paragraph",
+      "text": "整个项目按数据进入窗口的过程组织：采集到的原始帧先进入协议解析器，解析后的 PacketData 进入 Dispatcher，再由 gameplay service 写入 StateStore。悬浮窗不直接解析包，也不直接读 Frida，它只拿整理后的状态去渲染界面。"
+    },
+    {
+      "type": "code",
+      "language": "text",
+      "filename": "seer_assistant_py/data-flow.txt",
+      "code": "Seer Unity Client\n  -> FridaCapture: passive send / recv frames\n  -> PacketProcessor: decrypt, frame split, parse header, socket tracking\n  -> Dispatcher: route by cmd_id\n  -> BattleService / ProfileService: packet fields -> normalized state\n  -> StateStore: batch update, slim snapshot, live callback\n  -> overlay.view_model: stable facts -> UI model\n  -> OverlayWindow: PySide6 draggable windows\n\nWebsite side\n  -> Cloudflare Worker + Supabase\n  -> license, announcements, community counters, strategy library, battle samples"
+    },
+    {
+      "type": "paragraph",
+      "text": "这样分工的好处是每层只做自己的事。Frida 层不负责业务判断，PacketProcessor 不知道 UI，StateStore 不知道窗口样式，策略建议也不会反向控制游戏动作。项目复杂度主要被拆在这些模块之间。"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "技术栈选择"
+    },
+    {
+      "type": "paragraph",
+      "text": "桌面端使用 Python 3.12、Frida、PySide6、cryptography 和 UnityPy。Frida 负责 attach Unity 客户端并读取网络帧，PySide6 负责悬浮窗，cryptography 用于授权和策略建议的签名/加密，UnityPy 和资源构建脚本用于处理客户端资源与网站资源。官网侧独立为 React、TypeScript、Cloudflare Pages/Worker 和 Supabase。"
+    },
+    {
+      "type": "code",
+      "language": "toml",
+      "filename": "pyproject.toml",
+      "code": "[project]\nname = \"seer-assistant-py\"\nversion = \"1.1.6.1\"\ndescription = \"Python rewrite of the SeerAssistant packet capture and battle state pipeline.\"\nrequires-python = \">=3.12\"\ndependencies = [\n  \"certifi>=2024.0.0\",\n  \"cryptography>=42.0.0\",\n  \"frida\",\n  \"PySide6==6.7.3\",\n  \"truststore>=0.8.0\",\n  \"typing_extensions>=4.15.0\",\n  \"UnityPy\"\n]\n\n[project.scripts]\nseer-assistant = \"seer_assistant.app:main\"\n\n[project.gui-scripts]\nseer-assistant-overlay = \"seer_assistant.release_app:main\""
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "命令行入口"
+    },
+    {
+      "type": "paragraph",
+      "text": "命令行把正式功能和开发测试功能分开。`overlay` 是正式悬浮框，启动前会走版本检查和授权检查；`client-send-probe` 是开发测试命令，默认只观察，只有传入 `--invoke-*` 参数时才会调用客户端内部方法。这样可以避免把测试路径不小心带进正式工具。"
+    },
+    {
+      "type": "code",
+      "language": "python",
+      "filename": "src/seer_assistant/app.py",
+      "code": "def build_parser() -> argparse.ArgumentParser:\n    parser = argparse.ArgumentParser(prog=\"seer-assistant\")\n    subparsers = parser.add_subparsers(dest=\"command\", required=True)\n\n    _add_simple_config_command(subparsers, \"run\", \"start packet capture pipeline\")\n    _add_simple_config_command(subparsers, \"overlay\", \"open overlay window\")\n    _add_simple_config_command(subparsers, \"show-state\", \"print current state snapshot\")\n    _add_simple_config_command(subparsers, \"build-resources\", \"rebuild the local tool seed resources\")\n    _add_simple_config_command(subparsers, \"build-web-resources\", \"update the full resource snapshot used by website export scripts\")\n    _configure_extract_client_images_parser(subparsers)\n    _configure_client_send_probe_parser(subparsers)\n    _add_simple_config_command(subparsers, \"community-sync-counters\", \"sync approved community pet counters\")\n    return parser\n\n\ndef _handle_overlay(args: argparse.Namespace) -> int:\n    config = AppConfig.load(args.config)\n    ensure_version_allowed(config)\n    auth_state = ensure_license(config, interactive=True, purpose=\"overlay\")\n    return overlay_command(args.config, license_already_checked=True, auth_state=auth_state)"
+    },
+    {
+      "type": "paragraph",
+      "text": "正式入口和测试入口都存在，但默认行为完全不同。正式悬浮框不会维护独立 session/SN，不会自己构造外部 socket 游戏包；测试命令需要调用者明确说明要探测哪个客户端方法或命令号。"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "悬浮框启动流程"
+    },
+    {
+      "type": "paragraph",
+      "text": "悬浮框不是单个窗口脚本。启动时要先拿单实例锁、清理旧战斗状态、预加载名称资源、同步社区对策、启动在线状态上报、创建对战记录上传 worker、创建 PySide6 窗口、构建 StateStore，最后再启动 packet capture 线程。"
+    },
+    {
+      "type": "code",
+      "language": "python",
+      "filename": "src/seer_assistant/commands/overlay.py",
+      "code": "class _OverlayPacketSession:\n    def run(self) -> int:\n        self._log_launch_options()\n        _reset_overlay_state_for_overlay_launch(\n            self._config.state_dump_path,\n            self._config.client_type.value,\n            self._logger,\n        )\n        self._names = self._load_names()\n        self._prepare_community_pet_counters_for_overlay()\n        self._start_community_pet_counters_sync_for_overlay(self._names)\n        self._start_user_presence_reporter()\n        self._battle_sample_uploader = self._build_battle_sample_uploader()\n        self._window = self._build_window(self._names)\n        self._state_store = self._build_state_store()\n        self._start_packet_capture(self._names, self._state_store)\n        try:\n            self._window.run()\n        finally:\n            self.close()\n        return 0"
+    },
+    {
+      "type": "paragraph",
+      "text": "启动时会清空战斗残留状态，但保留账号缓存，比如 UID、昵称、称号和装扮。这样用户重启工具后不会看到上一场战斗的脏数据，同时待战账号卡片又不会完全空白。"
+    },
+    {
+      "type": "code",
+      "language": "python",
+      "filename": "src/seer_assistant/commands/overlay.py",
+      "code": "def _reset_overlay_state_for_overlay_launch(state_path: Path, client_type: str, logger: logging.Logger) -> None:\n    previous_snapshot = _load_overlay_state_snapshot(state_path, client_type)\n    snapshot = _empty_overlay_state_snapshot(client_type)\n    _preserve_overlay_cached_self_profile(previous_snapshot, snapshot)\n    snapshot[\"updated_at\"] = datetime.now().isoformat(timespec=\"seconds\")\n    _write_overlay_state_snapshot(state_path, snapshot)\n    logger.info(\"overlay state reset at launch: %s\", state_path)\n\n\ndef _preserve_overlay_cached_self_profile(source_snapshot: dict[str, object], target_snapshot: dict[str, object]) -> None:\n    source_player = source_snapshot.get(\"self_player\")\n    if not isinstance(source_player, dict):\n        return\n    target_player = target_snapshot.setdefault(\"self_player\", {})\n    for field_name in (\"user_id\", \"nickname\", \"title\", \"title_id\", \"owned_title_ids\", \"fashions\", \"fashion_ids\"):\n        value = source_player.get(field_name)\n        if value is not None:\n            target_player[field_name] = value"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "正式抓包白名单"
+    },
+    {
+      "type": "paragraph",
+      "text": "Unity 正式悬浮框不会把所有收包都丢进业务层。它为正式展示维护了一组 recv cmd 白名单，同时只允许几类已验证的客户端内部只读刷新进入 send 观察路径：41080 forever、2051 昵称装扮、2052 更多资料，以及 45144 BP 操作。"
+    },
+    {
+      "type": "code",
+      "language": "python",
+      "filename": "src/seer_assistant/commands/overlay.py",
+      "code": "_OVERLAY_UNITY_RECV_CMD_IDS = frozenset({\n    1001, 2001, 2051, 2052, 2301, 2407, 2503, 2504, 2505,\n    2506, 2595, 2604, 3403, 3404, 41080, 41329, 41635,\n    41921, 41928, 43706, 8015, 45139, 45141,\n})\n\n\ndef _formal_overlay_state_store_options(*, debug_enabled: bool = False) -> StateStoreOptions:\n    return StateStoreOptions(\n        keep_full_battle_effects=False,\n        reload_from_disk_before_mutation=False,\n        persist_to_disk=False,\n    )"
+    },
+    {
+      "type": "code",
+      "language": "python",
+      "filename": "src/seer_assistant/commands/overlay.py",
+      "code": "unity_recv_cmd_ids = None if debug_enabled or config.client_type.value != \"unity\" else _OVERLAY_UNITY_RECV_CMD_IDS\nactive_peak_forever_ids = frozenset(peak_forever_ids()) if config.client_type.value == \"unity\" else frozenset()\nactive_user_info_refresh_enabled = config.client_type.value == \"unity\"\nactive_user_more_info_refresh_enabled = config.client_type.value == \"unity\"\nunity_send_cmd_ids = frozenset(\n    ({41080} if active_peak_forever_ids else set())\n    | ({2051} if active_user_info_refresh_enabled else set())\n    | ({2052} if active_user_more_info_refresh_enabled else set())\n    | {45144}\n)\n\ncapture.run(\n    target_name,\n    config.game_pid,\n    on_frame,\n    capture_send=debug_enabled or config.battle_packet_discovery_capture_send,\n    unity_recv_cmd_ids=unity_recv_cmd_ids,\n    unity_send_cmd_ids=unity_send_cmd_ids,\n    active_ktool_forever_ids=active_peak_forever_ids,\n    active_user_info_refresh_enabled=active_user_info_refresh_enabled,\n    active_user_more_info_refresh_enabled=active_user_more_info_refresh_enabled,\n)"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "协议帧解析"
+    },
+    {
+      "type": "paragraph",
+      "text": "PacketProcessor 负责处理最容易出问题的部分：TCP frame 可能半包、粘包，Unity 包体可能加密，客户端可能开多个 socket。解析器按 socket 维护 recv buffer，先取 4 字节大端长度，再等完整包到齐，必要时解密，最后按固定 17 字节包头解析。"
+    },
+    {
+      "type": "code",
+      "language": "python",
+      "filename": "src/seer_assistant/packet.py",
+      "code": "MAX_PACKET_LENGTH = 2 * 1024 * 1024\n\nclass PacketProcessor:\n    def process_recv_packet(self, socket_handle: int, payload: bytes) -> list[PacketData]:\n        packets: list[PacketData] = []\n        recv_buf = self._recv_bufs.setdefault(socket_handle, bytearray())\n        recv_buf.extend(payload)\n\n        while True:\n            if len(recv_buf) < 4:\n                break\n            packet_length = struct.unpack(\">I\", recv_buf[:4])[0]\n            if packet_length < 17 or packet_length > MAX_PACKET_LENGTH:\n                self._logger.warning(\"[recv-drop] socket=%s invalid_length=%s\", socket_handle, packet_length)\n                recv_buf.clear()\n                break\n            if len(recv_buf) < packet_length:\n                break\n\n            cipher_packet = bytes(recv_buf[:packet_length])\n            del recv_buf[:packet_length]\n            raw_packet = self.decrypt_packet(cipher_packet) if should_decrypt(cipher_packet, self._client_type) else cipher_packet\n            packet = self.parse_packet(raw_packet)\n\n            if packet.cmd_id == 1001:\n                self._on_login(packet, socket_handle)\n            elif not self._observe_socket(socket_handle, packet, is_send=False):\n                continue\n\n            packets.append(packet)\n            self._dispatcher.dispatch(packet)\n            self._notify_packet_observers(\"recv\", packet)\n        return packets\n\n    def parse_packet(self, packet: bytes) -> PacketData:\n        length, version, cmd_id, user_id, sn = struct.unpack(\">IBIII\", packet[:17])\n        if length != len(packet):\n            raise ValueError(f\"packet length mismatch: header={length} actual={len(packet)}\")\n        return PacketData(length=length, version=version, cmd_id=cmd_id, user_id=user_id, sn=sn, body=packet[17:length])"
+    },
+    {
+      "type": "paragraph",
+      "text": "这段代码看起来不花哨，但决定了工具能不能长时间挂着不乱。只要半包处理、socket 跟踪或登录 key 推导错一次，后面的 HP、技能、PP、BP 阵容和样本记录都会错。"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "状态仓库"
+    },
+    {
+      "type": "paragraph",
+      "text": "StateStore 是抓包结果和窗口之间的中间层。它用 RLock 保护内存状态，用 batch 合并一组包处理导致的多次更新，并把精简后的状态推送给 PySide6 窗口。正式悬浮框模式关闭持久化，避免 UI 更新时频繁写磁盘。"
+    },
+    {
+      "type": "code",
+      "language": "python",
+      "filename": "src/seer_assistant/state.py",
+      "code": "@dataclass(slots=True)\nclass StateStoreOptions:\n    keep_full_battle_effects: bool = True\n    reload_from_disk_before_mutation: bool = True\n    persist_to_disk: bool = True\n    persist_min_interval_seconds: float = 0.0\n    on_raw_snapshot_updated: Callable[[dict[str, object]], None] | None = None\n\nclass StateStore:\n    @contextmanager\n    def batch(self):\n        with self._lock:\n            self._batch_depth += 1\n        try:\n            yield\n        finally:\n            should_dump = False\n            with self._lock:\n                self._batch_depth -= 1\n                if self._batch_depth == 0 and self._batch_dirty:\n                    self._batch_dirty = False\n                    should_dump = True\n            if should_dump:\n                self.dump()"
+    },
+    {
+      "type": "paragraph",
+      "text": "状态合并也不是简单覆盖。比如技能 PP，如果当前值来自本场战斗的确认包，而新进来的数据来源不够强，就不能把当前 PP 覆盖回旧值。这个细节会直接影响悬浮窗显示得准不准。"
+    },
+    {
+      "type": "code",
+      "language": "python",
+      "filename": "src/seer_assistant/state.py",
+      "code": "def _should_preserve_confirmed_skill_pps(previous_skill_ids: list[int], current: PetSummary, incoming: PetSummary) -> bool:\n    current_source = str(current.skill_pp_source or \"\").strip().lower()\n    incoming_source = str(incoming.skill_pp_source or \"\").strip().lower()\n    if current_source not in CURRENT_BATTLE_SKILL_PP_SOURCES:\n        return False\n    if incoming_source in CURRENT_BATTLE_SKILL_PP_SOURCES:\n        return False\n    incoming_skill_ids = list(incoming.skill_ids)\n    if previous_skill_ids and incoming_skill_ids and previous_skill_ids != incoming_skill_ids:\n        return False\n    return True"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "战斗包转状态"
+    },
+    {
+      "type": "paragraph",
+      "text": "BattleService 把 cmd_id 路由成领域状态。2503 建立双方阵容和战斗模式，2504/2407 确认出场或换宠，2505 处理每轮动作、HP 变化、技能 PP 和结果，2506 收尾，41635 用于 BP 阶段对方阵容。这个模块是项目里最能体现协议理解的部分。"
+    },
+    {
+      "type": "code",
+      "language": "python",
+      "filename": "src/seer_assistant/gameplay/battle_service.py",
+      "code": "class BattleService:\n    def __init__(self, dispatcher: Dispatcher, state_store: StateStore, names: NameRepository, logger: logging.Logger, *, battle_sample_collector: BattleSampleCollector | None = None):\n        self._state = state_store\n        self._names = names\n        self._logger = logger\n        self._battle_sample_collector = battle_sample_collector\n\n        dispatcher.register(2503, self._handle_note_ready)\n        dispatcher.register(2504, self._handle_note_start_fight)\n        dispatcher.register(2505, self._handle_note_use_skill)\n        dispatcher.register(2506, self._handle_fight_over)\n        dispatcher.register(2407, self._handle_change_pet)\n        dispatcher.register(2051, self._handle_get_sim_user_info)\n        dispatcher.register(2595, self._handle_note_battle_buff)\n        dispatcher.register(41635, self._handle_get_user_per_info_by_id)\n        dispatcher.register(45139, self._handle_45139)\n        dispatcher.register(45141, self._handle_45141)"
+    },
+    {
+      "type": "paragraph",
+      "text": "2505 是回合信息核心。服务会先把包解析成动作数据，再根据 user_id、catch_time 和当前出场精灵判断动作属于我方还是敌方，随后同步 HP 变化、出手方 HP、技能 PP、状态值、上一动作和上一回合结果。"
+    },
+    {
+      "type": "code",
+      "language": "python",
+      "filename": "src/seer_assistant/gameplay/battle_service.py",
+      "code": "def _handle_note_use_skill(self, packet: PacketData) -> None:\n    parsed_packet = parse_fight_note_use_skill_2505(packet.body)\n    parsed_actions = [self._note_use_skill_action_payload(action) for action in parsed_packet.actions]\n    with self._state.batch():\n        turn_number = self._round_number\n        before_active = self._active_pet_states_by_user()\n        self._state.set_last_outcome(None)\n        enriched_actions: list[dict[str, object]] = []\n\n        for parsed in parsed_actions:\n            user_id = int(parsed[\"user_id\"])\n            self._flush_pending_change_pets(lambda pending: pending.user_id == user_id, reason=\"note_use_skill\")\n            side = \"self\" if user_id == self._self_user_id else \"enemy\"\n            actor_pet_id = self._self_pet_id if side == \"self\" else self._enemy_pet_id\n            actor_catch_time = self._self_pet_catch_time if side == \"self\" else self._enemy_pet_catch_time\n            enriched = dict(parsed)\n            enriched[\"side\"] = side\n            enriched[\"actor_pet_id\"] = actor_pet_id or None\n            enriched[\"actor_catch_time\"] = actor_catch_time or None\n            enriched_actions.append(enriched)\n\n        # 后续继续同步 HP、PP、last_action、last_outcome 和 sample collector。\n        self._round_number += 1\n        self._state.set_battle(True, self._round_number - 1)"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "隐藏字段处理"
+    },
+    {
+      "type": "paragraph",
+      "text": "项目里有一条很实际的工程规则：敌方包里隐藏或置零的六维和技能，不在正式 UI 里伪装成详细数据。41635 的 BP 阵容只作为预战参考；正式战斗里还要等 2503、2407 或 2505 给出确认信息。"
+    },
+    {
+      "type": "code",
+      "language": "python",
+      "filename": "src/seer_assistant/gameplay/battle_service.py",
+      "code": "def _handle_get_user_per_info_by_id(self, packet: PacketData) -> None:\n    if not self._allow_enemy_profile_packets:\n        return\n    if self._fight_ready_roster_received:\n        return\n    roster = parse_peak_jihad_rival_roster_41635(packet.body)\n    self._enemy_pre_battle_by_catch_time = {\n        pet.catch_time: pet\n        for pet in roster.pets\n        if pet.catch_time > 0\n    }\n    with self._state.batch():\n        self._pre_battle_match_active = True\n        self._state.set_ready(True)\n        self._state.set_pet_roster_count(\"enemy\", roster.count)\n        summaries = []\n        for pet in roster.pets:\n            pet_name = self._resolve_pet_name(pet.pet_id)\n            summary = self._enemy_pre_battle_pet_summary(pet, pet_name)\n            summaries.append(summary)\n            if not pet.stats_known:\n                self._logger.info(\"pre-battle rival stats hidden by packet: pet=%s(%s)\", pet_name, pet.pet_id)\n        self._state.set_bp_enemy_roster(summaries)\n        self._state.replace_pets(\"enemy\", summaries)\n        self._state.clear_active_pet(\"enemy\")"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "账号资料刷新"
+    },
+    {
+      "type": "paragraph",
+      "text": "待战窗口里的昵称、称号、装扮和三模式巅峰资料来自已验证的只读刷新。工具通过客户端内部 KTool/UserInfoManager 触发资料请求，再由抓包层读取真实回包。ProfileService 用队列关联 41080 请求和返回，避免把 forever 值解释错。"
+    },
+    {
+      "type": "code",
+      "language": "python",
+      "filename": "src/seer_assistant/gameplay/profile_service.py",
+      "code": "class ProfileService:\n    def observe_send_packet(self, packet: PacketData) -> None:\n        if packet.cmd_id != 41080 or len(packet.body) < 4:\n            return\n        forever_id = self._read_u32(packet.body, 0)\n        self._pending_self_forever_41080.append(forever_id if is_peak_forever_id(forever_id) else None)\n        if is_peak_forever_id(forever_id):\n            self._logger.info(\"peak forever request observed: forever=%s\", forever_id)\n\n    def _handle_self_forever_value_41080(self, packet: PacketData) -> None:\n        if len(packet.body) < 4 or not self._pending_self_forever_41080:\n            return\n        forever_id = self._pending_self_forever_41080.popleft()\n        if forever_id is None:\n            return\n        value = self._read_u32(packet.body, 0)\n        mode = peak_mode_for_forever_id(forever_id)\n        payload = build_peak_mode_payload(mode, self._peak_forever_values_by_mode.setdefault(mode, {}))\n        if payload:\n            self._set_peak_mode_stats(\"self\", mode, payload, replace_mode=mode not in self._peak_forever_initialized_modes)"
+    },
+    {
+      "type": "paragraph",
+      "text": "资料刷新和战斗信息共用 StateStore，但入口被区分得很清楚：战斗上下文激活时，背包批量包和单精灵详情包不会覆盖战斗内状态。否则待战资料可能把战斗中刚确认的 PP 或 HP 盖掉。"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "窗口数据整理"
+    },
+    {
+      "type": "paragraph",
+      "text": "PySide6 窗口不直接读原始状态字典，而是先把状态整理成窗口更容易使用的数据。这里会判断待机、BP、战斗、换场、结束等阶段，也会根据高级功能开关决定敌方信息能显示到什么程度。"
+    },
+    {
+      "type": "code",
+      "language": "python",
+      "filename": "src/seer_assistant/overlay/view_model.py",
+      "code": "def _build_overlay_view_model(snapshot: dict[str, object] | None, names: NameRepository | None = None, listen_mode: str | None = None, external_notice_text: str | None = None, pet_counters: PetCounterRepository | None = None, premium_features_enabled: bool = True) -> dict[str, object]:\n    data = snapshot if isinstance(snapshot, dict) else {}\n    self_player = data.get(\"self_player\") if isinstance(data.get(\"self_player\"), dict) else {}\n    enemy_player = data.get(\"enemy_player\") if isinstance(data.get(\"enemy_player\"), dict) else {}\n    phase = _detect_overlay_phase(data, self_player, enemy_player)\n    battle_active = phase in {\"bp\", \"battle\", \"transition\"}\n\n    return {\n        \"phase\": phase,\n        \"battle_active\": battle_active,\n        \"capture_status\": _build_capture_status_model(data),\n        \"idle_account\": _build_idle_account_model(self_player, names),\n        \"self_team\": _build_self_team_model(self_player, names, battle_active),\n        \"enemy_focus\": _build_enemy_focus_model(enemy_player, self_player, names, battle_active, pet_counters, phase=phase, premium_features_enabled=premium_features_enabled),\n        \"enemy_roster\": _build_enemy_roster_model(enemy_player, names, battle_active, pre_battle_phase=phase == \"bp\", premium_features_enabled=premium_features_enabled),\n        \"enemy_unrevealed\": _build_enemy_unrevealed_model(data, enemy_player, names, visible=phase in {\"battle\", \"transition\"}),\n    }"
+    },
+    {
+      "type": "paragraph",
+      "text": "敌方技能展示也有明确规则：普通视图只展示已用过或已确认的技能；PP 是否显示取决于数据来源和权限。这个层把页面体验和数据可靠性绑在一起，而不是为了 UI 好看填假数据。"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "资源按需缓存"
+    },
+    {
+      "type": "paragraph",
+      "text": "工具包不携带网站完整资源。发布包只带基础种子资源，遇到缺失精灵、技能、技能石、称号、物品、装扮时再按需访问资源 API，并写回本地工具资源。这样启动快，包体小，同时新资源出现时不用重新打完整资源包。"
+    },
+    {
+      "type": "code",
+      "language": "python",
+      "filename": "src/seer_assistant/resource_store.py",
+      "code": "class ResourceStore:\n    def _row_by_id(self, item_id: int, *, cache_key: str, bundle_name: str, data_key: str, id_key: str, remote_kind: str, normalizer: callable) -> dict[str, Any] | None:\n        if item_id <= 0:\n            return None\n        rows = self._cached_parsed(cache_key, lambda: _load_row_map(self.bundle(bundle_name).get(data_key), id_key))\n        cached = rows.get(item_id)\n        refresh_cached = remote_kind == \"skill\" and isinstance(cached, dict) and _remote_skill_row_needs_refresh(cached)\n        if isinstance(cached, dict) and not refresh_cached:\n            return cached\n\n        payload = self._fetch_remote_row(remote_kind, item_id)\n        if not isinstance(payload, dict):\n            return cached if isinstance(cached, dict) else None\n        row = normalizer(payload, item_id)\n        if not isinstance(row, dict):\n            return cached if isinstance(cached, dict) else None\n\n        rows[item_id] = row\n        self._merge_bundle_row(bundle_name, data_key, item_id, row)\n        return row"
+    },
+    {
+      "type": "code",
+      "language": "python",
+      "filename": "src/seer_assistant/resource_store.py",
+      "code": "def _write_bundle_file(self, bundle_name: str, payload: dict[str, Any]) -> None:\n    path = self.bundle_path(bundle_name)\n    temp_name: str | None = None\n    try:\n        path.parent.mkdir(parents=True, exist_ok=True)\n        with tempfile.NamedTemporaryFile(\"w\", encoding=\"utf-8\", delete=False, dir=str(path.parent), prefix=f\"{path.name}.\", suffix=\".tmp\") as handle:\n            json.dump(payload, handle, ensure_ascii=False, indent=2)\n            handle.write(\"\\n\")\n            temp_name = handle.name\n        Path(temp_name).replace(path)\n    except Exception:\n        if temp_name is not None:\n            Path(temp_name).unlink(missing_ok=True)"
+    },
+    {
+      "type": "paragraph",
+      "text": "按需缓存不是简单拉名字。技能资源会补完整效果文本、系别、类别、必中、先制、PP 和图标字段；旧版缓存里的简略技能会被刷新成新的格式。对悬浮窗来说，这部分的价值是把 ID 变成可读信息，同时不改变网络包本身告诉我们的内容。"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "策略建议怎么请求"
+    },
+    {
+      "type": "paragraph",
+      "text": "策略窗口不是本地下载完整策略库。桌面端根据当前包状态构建最小上下文，向官网 Worker 请求一次性 challenge，用本机授权缓存里的设备私钥签名，同时生成临时 ECDH P-256 公钥。后端验证设备、challenge、时间戳和签名后，在私有策略库里匹配，并把结果 AES-GCM 加密返回。"
+    },
+    {
+      "type": "code",
+      "language": "python",
+      "filename": "src/seer_assistant/strategy/client.py",
+      "code": "def _request_encrypted_strategy_payload(self, path: str, *, payload_key: str, payload: Mapping[str, object], payload_hash_key: str, payload_hash: str) -> dict[str, object]:\n    cache = self._load_cache()\n    device_hash = device_fingerprint_hash()\n    token = str(cache.get(\"device_token\") or \"\").strip()\n    install_id = str(cache.get(\"install_id\") or \"\").strip()\n    private_key = cache.get(\"device_private_key\")\n\n    challenge = self._post(\"/api/license/challenge\", {\"purpose\": \"strategy_decision\"})\n    response_private_key, response_public_jwk = _generate_response_key_pair()\n    response_key_hash = _json_sha256_hex(response_public_jwk)\n    request_time = _now_iso()\n    message = strategy_signature_message(\n        challenge_id=str(challenge.get(\"challenge_id\") or \"\"),\n        nonce=str(challenge.get(\"nonce\") or \"\"),\n        request_time=request_time,\n        device_token=token,\n        device_hash=device_hash,\n        install_id=install_id,\n        app_version=self._app_version,\n        context_hash=payload_hash,\n        response_key_hash=response_key_hash,\n    )\n    response = self._post(path, {\n        \"device_token\": token,\n        \"device_hash\": device_hash,\n        \"install_id\": install_id,\n        \"app_version\": self._app_version,\n        \"signature\": sign_message(private_key, message),\n        payload_key: dict(payload),\n        payload_hash_key: payload_hash,\n        \"response_public_jwk\": response_public_jwk,\n    })\n    return _decrypt_strategy_response(response[\"encrypted\"], response_private_key, context_hash=payload_hash)"
+    },
+    {
+      "type": "paragraph",
+      "text": "StrategyAdvisor 还维护 session hash、pending request、策略游标和上一动作 marker。这样策略不是每次 UI 刷新都请求一次后端，也能处理脚本循环、玩家选择策略外动作、换宠后策略重置这些细节。"
+    },
+    {
+      "type": "code",
+      "language": "python",
+      "filename": "src/seer_assistant/strategy/advisor.py",
+      "code": "def update_snapshot(self, snapshot: Mapping[str, object] | None) -> dict[str, object]:\n    context = build_strategy_context(snapshot, self._names)\n    session = build_strategy_session_context(snapshot, self._names)\n    if context is None:\n        with self._lock:\n            self._clear_runtime_locked()\n        return {\"visible\": False, \"status\": \"idle\", \"title\": \"\", \"detail\": \"\"}\n    if session is None:\n        return {\"visible\": True, \"status\": \"loading\", \"title\": \"策略计算中\", \"detail\": \"正在等待本局阵容\"}\n\n    session_hash = strategy_session_hash(session)\n    context_hash = strategy_context_hash(context)\n    self._ensure_session_request(session, session_hash)\n\n    with self._lock:\n        policy = dict(self._session_policy) if self._session_hash == session_hash and isinstance(self._session_policy, dict) else None\n    if policy is None:\n        return {\"visible\": True, \"status\": \"loading\", \"title\": \"策略计算中\", \"detail\": \"正在准备本局策略\"}\n\n    result = evaluate_strategy_policy(policy, context, execution_state={\"cursors\": dict(self._execution_cursors)})\n    payload = {\"schema_version\": 1, \"context_hash\": context_hash, \"session_hash\": session_hash, \"result\": result}\n    with self._lock:\n        self._last_payload = payload\n        self._remember_decision_locked(context, context_hash, session_hash, result)\n    return _payload_to_strategy_model(payload)"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "高段位样本采集"
+    },
+    {
+      "type": "paragraph",
+      "text": "项目还做了高段位对战样本采集：王者及以上的竞技/狂野对局，战斗结束时上传整理后的样本。样本只保存对分析有用的字段，不上传原始 packet body；本地配置和官网管理员开关都会参与控制。"
+    },
+    {
+      "type": "code",
+      "language": "python",
+      "filename": "src/seer_assistant/analytics/battle_collection.py",
+      "code": "def record_fight_over(self, packet: object, snapshot: Mapping[str, object]) -> None:\n    sample = self._current\n    if sample is None:\n        return\n    self._refresh_envelope(sample, snapshot)\n    sample[\"ended_at\"] = _now_iso()\n    sample[\"fight_over_packet\"] = {\n        \"cmd_id\": _parse_int(getattr(packet, \"cmd_id\", None)) or 2506,\n        \"user_id\": _parse_int(getattr(packet, \"user_id\", None)) or 0,\n        \"sn\": _parse_int(getattr(packet, \"sn\", None)) or 0,\n        \"body_size\": len(getattr(packet, \"body\", b\"\") or b\"\"),\n    }\n    self._finalize_counts(sample)\n    self._current = None\n    self._rounds_by_turn = {}\n\n    rank_gate = rank_gate_from_snapshot(snapshot) or _mapping(sample.get(\"rank_gate\"))\n    if not rank_gate:\n        self._logger.info(\"battle sample not uploaded: current rank is below king\")\n        return\n    if not _sample_has_useful_round_data(sample):\n        self._logger.info(\"battle sample not uploaded: no useful round data\")\n        return\n    sample[\"rank_gate\"] = dict(rank_gate)\n    self._submit_sample(sample)"
+    },
+    {
+      "type": "paragraph",
+      "text": "这部分为统计和策略分析留下了可回放的数据。它不是为了立刻做自动决策，而是先把真实对局整理成 rounds、actions、switches、players、rank_gate 和 battle mode。"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "发布版启动"
+    },
+    {
+      "type": "paragraph",
+      "text": "发布版入口比开发命令多一层启动诊断：解析配置、单实例锁、版本阻断、异步更新检查、授权验证、检测游戏进程、写 startup_events.log，最后才进入悬浮框。启动失败时会弹窗并写 startup_crash.log，这对桌面工具分发很关键。"
+    },
+    {
+      "type": "code",
+      "language": "python",
+      "filename": "src/seer_assistant/release_app.py",
+      "code": "def main(argv: list[str] | None = None) -> int:\n    _append_startup_event(\"main_enter\", frozen=bool(getattr(sys, \"frozen\", False)), cwd=Path.cwd())\n    try:\n        command, explicit_path = _parse_release_args(argv)\n        config_path = _resolve_release_config(explicit_path)\n        config = AppConfig.load(config_path)\n        with _OverlaySingleInstanceLock(config.state_dump_path):\n            ensure_version_allowed(config)\n            start_update_check(config)\n            auth_state = ensure_license(\n                config,\n                interactive=True,\n                purpose=command,\n                force_enabled=_should_force_license(),\n            )\n            if not _game_process_running(config):\n                _show_error_message(_build_game_not_running_message(config))\n                return 1\n            return overlay_command_after_startup_checks(\n                config,\n                single_instance_lock_acquired=True,\n                auth_state=auth_state,\n            )\n    except Exception:\n        _show_startup_crash(sys.exc_info()[1] or RuntimeError(\"unknown startup crash\"))\n        return 1"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "官网和后台"
+    },
+    {
+      "type": "paragraph",
+      "text": "桌面工具不是孤立运行。官网负责下载页、公告、社区对策、策略草稿、授权/CDK、工具在线、后台设置、版本清单和对战样本接收。技术栈是 React + TypeScript + Vite，后端能力收在 Cloudflare Worker，数据和 Auth 使用 Supabase。"
+    },
+    {
+      "type": "code",
+      "language": "text",
+      "filename": "webapp/backend-boundary.txt",
+      "code": "Cloudflare Worker API\n  /api/license/challenge\n  /api/license/activate\n  /api/license/renew\n  /api/license/me\n  /api/tool/pvp-strategy/decision\n  /api/tool/pvp-strategy/session\n  /api/tool/battle-samples\n  /api/admin/tool-settings\n  /api/admin/licenses\n  /api/admin/pvp-strategy-drafts\n\nSupabase\n  Auth / Database / private strategy storage / battle sample table / site settings"
+    },
+    {
+      "type": "paragraph",
+      "text": "这个拆分让本地工具保持轻：桌面端只做采集、展示和最小必要缓存；官网端负责账号、授权、私有策略库、后台设置和社区数据。需要私钥或 service role 的逻辑都留在 Worker，不塞进前端页面。"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "测试与发布"
+    },
+    {
+      "type": "paragraph",
+      "text": "项目里有比较多的单元测试，覆盖 packet parser、窗口数据整理、授权客户端、策略建议、样本采集和发布打包。发布版本只改 `pyproject.toml` 的版本号，build 脚本、程序内版本、release 目录和 update manifest 都从同一个版本源读取。"
+    },
+    {
+      "type": "code",
+      "language": "powershell",
+      "filename": "release-checks.ps1",
+      "code": ".\\.venv\\Scripts\\python.exe -m pytest -q --basetemp .pytest_tmp\n.\\.venv\\Scripts\\python.exe -m compileall -q src\n.\\build_release.cmd\n\n# 涉及官网时：\ncd webapp\nnpm run build\nnpx wrangler pages deploy webapp/dist --project-name seer-assistant --branch main --commit-dirty=true"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "工程取舍"
+    },
+    {
+      "type": "list",
+      "items": [
+        "把正式功能和研究命令分开：正式悬浮框只展示已验证信息，client-send-probe 留给开发测试。",
+        "把抓包结果和 UI 展示分开：PacketProcessor、BattleService、StateStore、窗口数据整理和 OverlayWindow 各自负责一段。",
+        "把本地工具和官网后台分开：本地不保存完整策略库，官网后端负责私有策略、授权、后台开关和样本落库。",
+        "把资源种子和完整资源分开：工具只带基础资源，缺失时按需缓存，网站资源通过独立命令更新。",
+        "把可展示真值和派生判断分开：隐藏字段不补洞，策略建议只做参考，自动伤害和控制推断不进入正式 UI。"
+      ]
+    },
+    {
+      "type": "paragraph",
+      "text": "我觉得这个项目真正有价值的地方，不是“能显示几个窗口”，而是把一个不稳定、黑盒、实时的客户端环境拆成了能解释清楚的处理过程：包从哪里来、字段能不能信、状态怎么合并、UI 为什么这样显示、策略建议如何鉴权、对战记录什么时候上传，都能在代码里找到答案。"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "后面还想做什么"
+    },
+    {
+      "type": "list",
+      "items": [
+        "继续和 Go 版 seer_offline 的 packet parser 互相校验，减少 Python 侧解析偏差。",
+        "完善更多 cmd 的正式来源文档，让每个 UI 字段都能追到 packet 或只读资料刷新路径。",
+        "让对战记录保留更多可回放信息，为策略覆盖统计和模型分析打基础。",
+        "继续收紧正式悬浮框的数据规则，研究字段不直接进入用户默认视图。",
+        "把官网策略草稿、审核和私有策略库同步流程做得更顺，减少人工搬运。"
+      ]
+    }
+  ]
+}

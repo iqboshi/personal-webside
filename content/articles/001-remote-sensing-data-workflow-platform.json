@@ -1,0 +1,355 @@
+{
+  "slug": "remote-sensing-data-workflow-platform",
+  "category": "项目",
+  "date": "2026-06-04",
+  "title": "遥感数据处理与流程管理平台",
+  "excerpt": "一个用于管理遥感数据、地图范围、处理流程和运行结果的 Web 项目。",
+  "tags": [
+    "React",
+    "TypeScript",
+    "Ant Design",
+    "FastAPI",
+    "Python",
+    "OpenLayers",
+    "React Flow"
+  ],
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "项目定位"
+    },
+    {
+      "type": "paragraph",
+      "text": "我没有把它做成几张静态页面，而是按一个可操作的数据管理系统来设计。一个数据文件进入系统后，要能被记录、预览、放到地图上查看、接到处理流程里，运行结束后还能保存新的结果。"
+    },
+    {
+      "type": "paragraph",
+      "text": "线上预览使用示例数据，别人打开网页就能看页面和交互；本地版本保留 FastAPI、SQLAlchemy 和 SQLite，可以跑接口、写数据库、做账户审批和流程保存。展示页不是空壳，源码里也能看到后端是怎么组织的。"
+    },
+    {
+      "type": "callout",
+      "text": "下面主要看几个地方：数据库怎么设计、接口怎么拆、文件怎么上传、地图怎么显示、处理流程保存前怎么检查。",
+      "title": "主要看点"
+    },
+    {
+      "type": "links",
+      "title": "项目入口",
+      "links": [
+        {
+          "label": "在线预览",
+          "href": "https://iqboshi.github.io/platform/",
+          "note": "GitHub Pages 版本，内置示例数据"
+        },
+        {
+          "label": "GitHub 仓库",
+          "href": "https://github.com/iqboshi/platform",
+          "note": "React/TypeScript + FastAPI 项目源码"
+        }
+      ]
+    },
+    {
+      "type": "image",
+      "src": "/assets/platform-preview.png",
+      "alt": "遥感数据处理与流程管理平台在线预览截图",
+      "caption": "在线预览首屏：平台总览、工作空间状态、行动队列和最近运行记录。"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "数据怎么在页面之间传递"
+    },
+    {
+      "type": "paragraph",
+      "text": "这个项目最重要的一点，是数据不能只停在某一张表或某一个页面里。数据集、地图、处理流程和运行记录要能互相接上：上传的数据能被地图查看，也能被后面的处理流程继续使用。"
+    },
+    {
+      "type": "code",
+      "language": "text",
+      "filename": "resource-flow.txt",
+      "code": "上传文件 / 示例数据\n  -> Dataset / DatasetVersion\n  -> TileJSON / SpatialOverlay\n  -> Spatial Studio 中绘制 ROI、叠加图层、检查范围\n  -> WorkflowGraph 中绑定 dataset_version / spatial_roi / model_version\n  -> WorkflowVersion 保存图结构\n  -> WorkflowRun 记录状态、指标、输出数据版本\n  -> ProductAsset / PersonalAssets 继续管理结果"
+    },
+    {
+      "type": "list",
+      "items": [
+        "数据集负责回答：这个资源属于哪个工作区、是什么类型、当前最新版本是谁。",
+        "数据集版本负责回答：文件实际存在哪里、原始文件名是什么、bbox/metadata/visibility/owner 怎么记录。",
+        "地图页面负责回答：这个数据版本能不能放到地图上看，能不能和选区或叠加图层一起用。",
+        "流程页面负责回答：节点之间传的是什么数据，参数是否填完整，提交前能不能发现明显错误。",
+        "运行记录负责回答：谁提交了任务，任务现在是什么状态，最终结果保存到了哪里。"
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "仓库结构"
+    },
+    {
+      "type": "paragraph",
+      "text": "前端按页面和复杂组件拆分，后端按 API、schema、service 和任务运行代码拆分。地图画布和流程画布是单独的大组件，业务页面只负责组织状态、表单、路由和数据加载。"
+    },
+    {
+      "type": "code",
+      "language": "text",
+      "filename": "platform/",
+      "code": "platform/\n  apps/web\n    src/components/WorkflowCanvas.tsx       流程编辑画布\n    src/components/SpatialMapCanvas.tsx     OpenLayers 地图画布\n    src/features/spatial/SpatialStudioPage.tsx\n    src/features/workflows/WorkflowsPage.tsx\n    src/features/asset-flow                 数据在页面之间传递\n  backend\n    src/platform_backend/api/routes         FastAPI 路由\n    src/platform_backend/models/entities.py SQLAlchemy 实体\n    src/platform_backend/services           业务读写和权限过滤\n    src/platform_backend/workflows          流程定义、校验和运行\n    src/platform_backend/tiler              地图预览接口\n  packages/types                            前端共享类型\n  config / infra / docs"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "数据库模型"
+    },
+    {
+      "type": "paragraph",
+      "text": "数据模型没有只保存页面展示字段，而是把项目真正要用的对象拆开：数据集、数据版本、流程版本、运行记录、地图选区和叠加图层分别建表。这样页面展示、任务运行和结果追溯不会混在一个大对象里。"
+    },
+    {
+      "type": "code",
+      "language": "py",
+      "filename": "backend/src/platform_backend/models/entities.py",
+      "code": "class DatasetVersion(UUIDPrimaryKeyMixin, TimestampMixin, Base):\n    __tablename__ = \"dataset_versions\"\n\n    dataset_id: Mapped[str] = mapped_column(ForeignKey(\"datasets.id\"), nullable=False)\n    version: Mapped[int] = mapped_column(Integer, nullable=False)\n    status: Mapped[DatasetStatus] = mapped_column(Enum(DatasetStatus), nullable=False)\n    asset_path: Mapped[str] = mapped_column(String(255), nullable=False)\n    preview_url: Mapped[str | None] = mapped_column(String(255), nullable=True)\n    original_file_name: Mapped[str] = mapped_column(String(255), nullable=False)\n    content_type: Mapped[str] = mapped_column(String(255), nullable=False)\n    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)\n    bbox: Mapped[list[float] | None] = mapped_column(JSON, nullable=True)\n    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)\n\n\nclass WorkflowVersion(UUIDPrimaryKeyMixin, TimestampMixin, Base):\n    __tablename__ = \"workflow_versions\"\n\n    workflow_id: Mapped[str] = mapped_column(ForeignKey(\"workflows.id\"), nullable=False)\n    version: Mapped[int] = mapped_column(Integer, nullable=False)\n    graph_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)\n\n\nclass WorkflowRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):\n    __tablename__ = \"workflow_runs\"\n\n    workflow_version_id: Mapped[str] = mapped_column(ForeignKey(\"workflow_versions.id\"))\n    input_dataset_version_id: Mapped[str] = mapped_column(ForeignKey(\"dataset_versions.id\"))\n    model_version_id: Mapped[str] = mapped_column(ForeignKey(\"model_versions.id\"))\n    status: Mapped[WorkflowRunStatus] = mapped_column(Enum(WorkflowRunStatus), nullable=False)\n    submitted_by: Mapped[str] = mapped_column(ForeignKey(\"users.id\"), nullable=False)\n    result_dataset_version_id: Mapped[str | None] = mapped_column(String(36), nullable=True)\n    metrics_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)"
+    },
+    {
+      "type": "paragraph",
+      "text": "这里使用 JSON 字段不是为了省事，而是因为不同资源会带不同描述：bbox、columns、task_type、annotation_kind、owner 信息和运行产物都可能变化。稳定字段放列里，变化快的描述性信息放 metadata_json，扩展时就不用频繁改表。"
+    },
+    {
+      "type": "code",
+      "language": "py",
+      "filename": "backend/src/platform_backend/models/entities.py",
+      "code": "class SpatialRoi(UUIDPrimaryKeyMixin, TimestampMixin, Base):\n    __tablename__ = \"spatial_rois\"\n\n    workspace_id: Mapped[str] = mapped_column(ForeignKey(\"workspaces.id\"), nullable=False)\n    owner_user_id: Mapped[str] = mapped_column(ForeignKey(\"users.id\"), nullable=False, index=True)\n    name: Mapped[str] = mapped_column(String(160), nullable=False)\n    description: Mapped[str] = mapped_column(Text, default=\"\", nullable=False)\n    geometry_type: Mapped[str] = mapped_column(String(40), nullable=False)\n    geometry_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)\n    bbox: Mapped[list[float]] = mapped_column(JSON, default=list, nullable=False)\n    style_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)\n    tags_json: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)\n    visibility: Mapped[str] = mapped_column(String(20), nullable=False, default=\"private\")\n\n\nclass SpatialOverlay(UUIDPrimaryKeyMixin, TimestampMixin, Base):\n    __tablename__ = \"spatial_overlays\"\n\n    workspace_id: Mapped[str] = mapped_column(ForeignKey(\"workspaces.id\"), nullable=False)\n    owner_user_id: Mapped[str] = mapped_column(ForeignKey(\"users.id\"), nullable=False, index=True)\n    dataset_version_id: Mapped[str] = mapped_column(ForeignKey(\"dataset_versions.id\"))\n    name: Mapped[str] = mapped_column(String(160), nullable=False)\n    overlay_type: Mapped[str] = mapped_column(String(40), nullable=False)\n    opacity: Mapped[float] = mapped_column(nullable=False, default=0.85)\n    style_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)\n    visibility: Mapped[str] = mapped_column(String(20), nullable=False, default=\"private\")"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "API 分层"
+    },
+    {
+      "type": "paragraph",
+      "text": "后端入口只做应用装配，真正的业务接口拆成多个 router。这样数据集、地图资源、处理流程、模型、任务、审批这些模块能独立改，不会把所有接口都塞进一个文件。"
+    },
+    {
+      "type": "code",
+      "language": "py",
+      "filename": "backend/src/platform_backend/main.py",
+      "code": "def create_app() -> FastAPI:\n    configure_logging()\n    settings = get_settings()\n\n    app = FastAPI(\n        title=settings.app_name,\n        version=\"0.1.0\",\n        description=\"Remote sensing data management and workflow orchestration platform.\",\n    )\n    app.add_middleware(\n        CORSMiddleware,\n        allow_origins=settings.cors_origins,\n        allow_methods=[\"*\"],\n        allow_headers=[\"*\"],\n        expose_headers=[\"Content-Disposition\"],\n    )\n\n    @app.on_event(\"startup\")\n    def startup() -> None:\n        init_platform()\n\n    app.include_router(api_router, prefix=settings.api_v1_prefix)\n    app.include_router(tiles_router, prefix=\"/tiles\", tags=[\"tiles\"])\n    return app"
+    },
+    {
+      "type": "code",
+      "language": "py",
+      "filename": "backend/src/platform_backend/api/router.py",
+      "code": "api_router = APIRouter()\napi_router.include_router(auth.router, prefix=\"/auth\", tags=[\"auth\"])\napi_router.include_router(asset_flow.router, prefix=\"/asset-flow\", tags=[\"asset-flow\"])\napi_router.include_router(workspaces.router, prefix=\"/workspaces\", tags=[\"workspaces\"])\napi_router.include_router(datasets.router, prefix=\"/datasets\", tags=[\"datasets\"])\napi_router.include_router(products.router, prefix=\"/products\", tags=[\"products\"])\napi_router.include_router(dataset_versions.router, prefix=\"/dataset-versions\", tags=[\"dataset-versions\"])\napi_router.include_router(splits.router, prefix=\"/splits\", tags=[\"splits\"])\napi_router.include_router(workflows.router, prefix=\"/workflows\", tags=[\"workflows\"])\napi_router.include_router(workflow_runs.router, prefix=\"/workflow-runs\", tags=[\"workflow-runs\"])\napi_router.include_router(models.router, prefix=\"/models\", tags=[\"models\"])\napi_router.include_router(spatial.router, prefix=\"/spatial\", tags=[\"spatial\"])\napi_router.include_router(jobs.router, prefix=\"/jobs\", tags=[\"jobs\"])\napi_router.include_router(platform_settings.router, prefix=\"/platform-settings\", tags=[\"platform-settings\"])"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "数据集上传"
+    },
+    {
+      "type": "paragraph",
+      "text": "上传分成两步：先生成一个 object_key，让前端知道这次上传属于哪个工作区和哪个数据集；真正收到文件后，再写入 storage_root/workspaces/{workspace_id}/datasets/{dataset_id}/v{version}，并创建新的 DatasetVersion。"
+    },
+    {
+      "type": "code",
+      "language": "py",
+      "filename": "backend/src/platform_backend/services/platform_store.py",
+      "code": "def create_upload_session(\n    *,\n    workspace_id: str,\n    dataset_name: str,\n    file_name: str,\n    content_type: str,\n) -> UploadSessionResponse:\n    safe_name = _slugify(file_name)\n    object_key = f\"uploads/{workspace_id}/{_slugify(dataset_name)}/{uuid4()}-{safe_name}\"\n    upload_url = f\"{get_settings().api_v1_prefix}/datasets/upload\"\n    return UploadSessionResponse(\n        object_key=object_key,\n        upload_url=upload_url,\n        headers={\n            \"X-Upload-Object-Key\": object_key,\n            \"X-Upload-Content-Type\": content_type,\n        },\n    )"
+    },
+    {
+      "type": "code",
+      "language": "py",
+      "filename": "backend/src/platform_backend/services/platform_store.py",
+      "code": "version_number = _next_dataset_version_number(db, dataset.id)\ntarget_dir = (\n    _storage_root()\n    / \"workspaces\"\n    / workspace_id\n    / \"datasets\"\n    / dataset.id\n    / f\"v{version_number}\"\n)\ntarget_dir.mkdir(parents=True, exist_ok=True)\nstored_name = f\"{uuid4()}-{_slugify(original_file_name)}\"\ntarget_path = target_dir / stored_name\n\nwith target_path.open(\"wb\") as output:\n    shutil.copyfileobj(upload_file, output)\n\nmetadata_json: dict[str, object] = {\n    \"content_type\": content_type or \"application/octet-stream\",\n    \"size_bytes\": size_bytes,\n    \"original_file_name\": original_file_name,\n    \"visibility\": \"private\",\n    \"owner_user_id\": current_user_id,\n    \"owner_display_name\": current_user_display_name,\n}"
+    },
+    {
+      "type": "paragraph",
+      "text": "这段代码让上传不只是“文件传上来”：它会变成一个明确的数据版本。地图、流程和资产页面拿到的都是 dataset_version_id，而不是到处传文件路径。"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "地图页面"
+    },
+    {
+      "type": "paragraph",
+      "text": "地图页面要处理的状态比较多：底图来源、临时画出的选区、已保存选区、叠加图层、不透明度、坐标输入和从其他页面跳转过来的数据。底图切换单独放在 map-base-layers.ts，选择会保存到 localStorage，避免每次进入地图都回到默认底图。"
+    },
+    {
+      "type": "code",
+      "language": "ts",
+      "filename": "apps/web/src/components/map-base-layers.ts",
+      "code": "export type MapBaseLayerKey = 'china' | 'china_alt' | 'osm';\n\nexport const MAP_BASE_LAYER_STORAGE_KEY = 'platform.map.baseLayer.v2';\n\nexport function readStoredMapBaseLayer(): MapBaseLayerKey {\n  if (typeof window === 'undefined') {\n    return 'china';\n  }\n  const storedValue = window.localStorage.getItem(MAP_BASE_LAYER_STORAGE_KEY);\n  if (storedValue === 'china' || storedValue === 'china_alt' || storedValue === 'osm') {\n    return storedValue;\n  }\n  return 'china';\n}\n\nexport function persistMapBaseLayer(nextValue: MapBaseLayerKey): void {\n  if (typeof window === 'undefined') {\n    return;\n  }\n  window.localStorage.setItem(MAP_BASE_LAYER_STORAGE_KEY, nextValue);\n}"
+    },
+    {
+      "type": "paragraph",
+      "text": "空间数据进入后端时不能只相信前端画出来的多边形。后端会检查 GeoJSON 是否为 Polygon、坐标环是否足够、经纬度是否是有限数字并落在合法范围内。"
+    },
+    {
+      "type": "code",
+      "language": "py",
+      "filename": "backend/src/platform_backend/services/spatial_store.py",
+      "code": "def _validate_geojson_polygon(\n    geometry_type: str,\n    geometry: dict[str, Any],\n) -> tuple[dict[str, Any], list[float]]:\n    if not isinstance(geometry, dict):\n        raise ValueError(\"geometry must be a GeoJSON object.\")\n    if str(geometry.get(\"type\", \"\")).strip() != \"Polygon\":\n        raise ValueError(\"Only GeoJSON Polygon geometries are supported.\")\n\n    coordinates = geometry.get(\"coordinates\")\n    if not isinstance(coordinates, list) or not coordinates:\n        raise ValueError(\"Polygon coordinates are required.\")\n\n    first_ring = coordinates[0]\n    if not isinstance(first_ring, list) or len(first_ring) < 4:\n        raise ValueError(\"Polygon must contain at least four coordinate pairs.\")\n\n    for point in first_ring:\n        lon = float(point[0])\n        lat = float(point[1])\n        if not (isfinite(lon) and isfinite(lat)):\n            raise ValueError(\"Geometry coordinates must be finite numbers.\")\n        if not -180 <= lon <= 180:\n            raise ValueError(\"Longitude must be within [-180, 180].\")"
+    },
+    {
+      "type": "paragraph",
+      "text": "数据集版本如果带 bbox，后端就能返回一份 TileJSON。前端不需要关心文件存在哪里，只要拿到 tiles、bounds、minzoom 和 maxzoom，就可以把预览图层接到 OpenLayers。"
+    },
+    {
+      "type": "code",
+      "language": "py",
+      "filename": "backend/src/platform_backend/tiler/routes.py",
+      "code": "@router.get(\"/datasets/{dataset_version_id}/tilejson.json\")\ndef dataset_tilejson(dataset_version_id: str) -> dict[str, object]:\n    with get_session_factory()() as session:\n        preview = tile_preview(session, dataset_version_id)\n    return {\n        \"tilejson\": \"3.0.0\",\n        \"name\": dataset_version_id,\n        \"tiles\": [f\"/tiles/datasets/{dataset_version_id}/{{z}}/{{x}}/{{y}}.png\"],\n        \"bounds\": preview.bounds,\n        \"minzoom\": preview.minzoom,\n        \"maxzoom\": preview.maxzoom,\n    }"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "处理流程图"
+    },
+    {
+      "type": "paragraph",
+      "text": "流程画布真正复杂的地方不在拖拽，而在保存下来的图是否说得清楚。每个节点要有类型、位置、参数、输入输出端口；每条边要指向 source/target 和对应 handle；节点目录还要写清楚输入输出、示例数据和常见错误。"
+    },
+    {
+      "type": "code",
+      "language": "py",
+      "filename": "backend/src/platform_backend/schemas/workflow.py",
+      "code": "WorkflowPortDataType = Literal[\n    \"dataset_version\",\n    \"table\",\n    \"raster\",\n    \"vector\",\n    \"roi\",\n    \"geo_raster\",\n    \"image_collection\",\n    \"feature_collection\",\n    \"model_version\",\n    \"metrics_report\",\n    \"prediction_mask\",\n    \"artifact\",\n]\n\nclass WorkflowNodePort(BaseModel):\n    key: str\n    label: str\n    description: str | None = None\n    data_types: list[WorkflowPortDataType] = Field(default_factory=list)\n    required: bool = False\n\n\nclass WorkflowParamDefinition(BaseModel):\n    key: str\n    label: str\n    field_type: WorkflowParamFieldType\n    default_value: Any | None = None\n    options: list[WorkflowParamOption] = Field(default_factory=list)\n    required: bool = False\n\n\nclass WorkflowGraph(BaseModel):\n    nodes: list[WorkflowNode]\n    edges: list[WorkflowEdge]"
+    },
+    {
+      "type": "code",
+      "language": "py",
+      "filename": "backend/src/platform_backend/schemas/workflow.py",
+      "code": "class WorkflowCatalogItem(BaseModel):\n    type: str\n    label: str\n    category: WorkflowNodeCategory\n    description: str\n    runtime_kind: WorkflowRuntimeKind = \"transform\"\n    supported_tasks: list[str] = Field(default_factory=list)\n    tags: list[str] = Field(default_factory=list)\n    inputs: list[WorkflowNodePort] = Field(default_factory=list)\n    outputs: list[WorkflowNodePort] = Field(default_factory=list)\n    params: list[WorkflowParamDefinition] = Field(default_factory=list)\n    input_contracts: list[WorkflowPortContract] = Field(default_factory=list)\n    output_contracts: list[WorkflowPortContract] = Field(default_factory=list)\n    example_inputs: list[WorkflowNodeExample] = Field(default_factory=list)\n    example_outputs: list[WorkflowNodeExample] = Field(default_factory=list)\n    common_errors: list[str] = Field(default_factory=list)\n    starter_bindings: list[WorkflowNodeStarterBinding] = Field(default_factory=list)\n    output_behaviors: list[WorkflowNodeOutputBehavior] = Field(default_factory=list)"
+    },
+    {
+      "type": "paragraph",
+      "text": "前端也保留了一层即时分析，用来在用户还没提交到后端前就判断节点大概处于 ready、missing_inputs、invalid_params 或 schema_mismatch。这样画布不会等到保存失败才告诉用户哪里断了。"
+    },
+    {
+      "type": "code",
+      "language": "ts",
+      "filename": "apps/web/src/features/workflows/workflow-contracts.ts",
+      "code": "export interface WorkflowNodeAnalysis {\n  state: 'ready' | 'missing_inputs' | 'invalid_params' | 'schema_mismatch';\n  tone: 'green' | 'gold' | 'red';\n  summary: string;\n  issues: WorkflowValidationIssue[];\n}\n\nfunction hasRequiredValue(\n  value: unknown,\n  fieldType: WorkflowNodeCatalogItem['params'][number]['fieldType'],\n): boolean {\n  if (fieldType === 'boolean') {\n    return typeof value === 'boolean';\n  }\n  if (fieldType === 'number') {\n    return typeof value === 'number' && Number.isFinite(value);\n  }\n  if (fieldType === 'multiselect') {\n    return Array.isArray(value) && value.length > 0;\n  }\n  return typeof value === 'string' ? value.trim().length > 0 : value !== undefined && value !== null;\n}"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "保存前检查"
+    },
+    {
+      "type": "paragraph",
+      "text": "后端检查比前端更严格。它会检查节点是否重复、节点类型是否支持、端口是否存在、必填输入是否缺失、数据集类型是否匹配。检查结果不是一段笼统的报错，而是带 code、severity、node_id、port_key 和 suggestion 的问题列表。"
+    },
+    {
+      "type": "code",
+      "language": "py",
+      "filename": "backend/src/platform_backend/workflows/validation.py",
+      "code": "def validate_workflow_graph(\n    graph: WorkflowGraph,\n    *,\n    dataset_semantics_resolver: DatasetSemanticsResolver | None = None,\n    _inside_subgraph: bool = False,\n) -> WorkflowValidationResult:\n    issues: list[WorkflowValidationIssue] = []\n\n    node_ids = [node.id for node in graph.nodes]\n    duplicates = [node_id for node_id, count in Counter(node_ids).items() if count > 1]\n    for node_id in duplicates:\n        issues.append(\n            _issue(\n                \"duplicate_node_id\",\n                f\"Duplicate node id: {node_id}\",\n                node_id=node_id,\n                suggestion=\"Rename one of the duplicated nodes before saving the workflow.\",\n            )\n        )\n\n    definitions = _definition_map()\n    supported_types = supported_node_types()\n    nodes_by_id = {node.id: node for node in graph.nodes}\n\n    for node in graph.nodes:\n        if node.type not in supported_types:\n            issues.append(\n                _issue(\n                    \"unsupported_node_type\",\n                    f\"Unsupported node type: {node.type}\",\n                    node_id=node.id,\n                    actual=node.type,\n                )\n            )\n            continue"
+    },
+    {
+      "type": "code",
+      "language": "py",
+      "filename": "backend/src/platform_backend/schemas/workflow.py",
+      "code": "class WorkflowValidationIssue(BaseModel):\n    code: str\n    severity: WorkflowIssueSeverity = \"error\"\n    message: str\n    node_id: str | None = Field(default=None, validation_alias=AliasChoices(\"node_id\", \"nodeId\"))\n    port_key: str | None = Field(default=None, validation_alias=AliasChoices(\"port_key\", \"portKey\"))\n    param_key: str | None = Field(default=None, validation_alias=AliasChoices(\"param_key\", \"paramKey\"))\n    expected: str | None = None\n    actual: str | None = None\n    suggestion: str | None = None\n\n\nclass WorkflowValidationResult(BaseModel):\n    valid: bool\n    errors: list[str] = Field(default_factory=list)\n    warnings: list[str] = Field(default_factory=list)\n    issues: list[WorkflowValidationIssue] = Field(default_factory=list)"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "保存流程版本"
+    },
+    {
+      "type": "paragraph",
+      "text": "保存处理流程时，后端会先把图里的已保存 ROI 解析掉，再做检查。通过后才写一条流程版本记录，并顺手写一条任务日志。版本号很重要：运行、下载、回滚、对比都应该指向某个确定的图结构，而不是浮动的当前草稿。"
+    },
+    {
+      "type": "code",
+      "language": "py",
+      "filename": "backend/src/platform_backend/services/platform_store.py",
+      "code": "def save_current_workflow_version(\n    db: Session,\n    graph: WorkflowGraph,\n    current_user: UserProfile | User,\n) -> WorkflowVersionSummary:\n    resolved_graph = resolve_saved_rois_in_workflow_graph(\n        db,\n        graph,\n        current_user=current_user,\n    )\n    _validate_workflow_graph_or_raise(db, resolved_graph)\n\n    workflow = _first_workflow(db)\n    saved = WorkflowVersion(\n        workflow_id=workflow.id,\n        version=_next_workflow_version_number(db, workflow.id),\n        graph_json=_ensure_workflow_owner_metadata(graph.model_dump(mode=\"json\"), current_user),\n    )\n    db.add(saved)\n    db.flush()\n    db.add(\n        JobLog(\n            job_type=\"workflow_save\",\n            reference_id=saved.id,\n            status=JobStatus.SUCCEEDED,\n            message=f\"Saved workflow version {saved.version}.\",\n        )\n    )\n    db.commit()\n    return _workflow_version_summary(saved)"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "模块之间怎么跳转"
+    },
+    {
+      "type": "paragraph",
+      "text": "我不希望每个页面都让用户重新选一遍数据，所以做了页面跳转时的数据传递。数据集、ROI、模型版本都可以生成一小段给流程页使用的参数，通过查询参数带过去，页面再自动绑定到合适的输入节点。"
+    },
+    {
+      "type": "code",
+      "language": "ts",
+      "filename": "apps/web/src/features/asset-flow/handoff.ts",
+      "code": "export function createWorkflowDatasetHandoff(\n  datasetVersionId: string,\n  options: { label?: string; source?: AssetHandoffSource; targetNodeId?: string } = {},\n): AssetHandoffPayload {\n  return {\n    version: 1,\n    target: 'workflow',\n    inputKind: 'dataset_version',\n    datasetVersionId,\n    targetNodeId: optionalTargetNodeId(options.targetNodeId),\n    label: options.label,\n    source: options.source ?? 'unknown',\n  };\n}\n\nexport function createWorkflowRoiHandoff(\n  roiId: string,\n  options: { label?: string; source?: AssetHandoffSource; targetNodeId?: string } = {},\n): AssetHandoffPayload {\n  return {\n    version: 1,\n    target: 'workflow',\n    inputKind: 'spatial_roi',\n    roiId,\n    targetNodeId: optionalTargetNodeId(options.targetNodeId),\n    label: options.label,\n    source: options.source ?? 'unknown',\n  };\n}"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "权限和审批"
+    },
+    {
+      "type": "paragraph",
+      "text": "项目里的账户系统不是只放一个登录框。注册后会进入待审批状态，接口层通过 require_permission 控制数据集、处理流程、地图资源等权限；登录时如果账户还在 PENDING，会返回明确的 pending_approval 错误。"
+    },
+    {
+      "type": "code",
+      "language": "py",
+      "filename": "backend/src/platform_backend/api/routes/auth.py",
+      "code": "@router.post(\"/login\", response_model=TokenResponse)\ndef login(request: LoginRequest, db: DatabaseDep) -> TokenResponse:\n    user = authenticate_user(db, request.email, request.password)\n    if user is None:\n        raise HTTPException(\n            status_code=status.HTTP_401_UNAUTHORIZED,\n            detail={\"code\": \"invalid_credentials\", \"message\": \"Email or password is incorrect.\"},\n        )\n\n    if user.approval_status.name == \"PENDING\":\n        raise HTTPException(\n            status_code=status.HTTP_403_FORBIDDEN,\n            detail={\"code\": \"pending_approval\", \"message\": \"Account is pending approval.\"},\n        )\n\n    touch_last_login(db, user)\n    return to_token_response(user, db)"
+    },
+    {
+      "type": "code",
+      "language": "py",
+      "filename": "backend/src/platform_backend/api/routes/workflows.py",
+      "code": "DatabaseDep = Annotated[Session, Depends(get_db)]\nWorkflowViewUserDep = Annotated[UserProfile, Depends(require_permission(\"workflow.view\"))]\nWorkflowManageUserDep = Annotated[UserProfile, Depends(require_permission(\"workflow.manage\"))]\nWorkflowRunUserDep = Annotated[UserProfile, Depends(require_permission(\"workflow.run\"))]\n\n@router.put(\n    \"/versions/current\",\n    response_model=WorkflowVersionSummary,\n)\ndef save_workflow_version_route(\n    request: WorkflowGraph,\n    db: DatabaseDep,\n    current_user: WorkflowManageUserDep,\n) -> WorkflowVersionSummary:\n    return save_current_workflow_version(db, request, current_user)"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "预览版和本地版"
+    },
+    {
+      "type": "paragraph",
+      "text": "这个项目分成两种使用方式：GitHub Pages 预览版优先保证打开速度和展示稳定性，所以使用示例数据；本地版跑 FastAPI 后端和 SQLite，可以体验真实读写、权限、上传、流程保存、地图资源和任务记录。"
+    },
+    {
+      "type": "list",
+      "items": [
+        "预览版适合放在公开主页里：别人不需要配置环境，就能看到页面组织、地图、流程编辑和数据传递的交互。",
+        "本地版适合看工程能力：接口、schema、service、数据库实体和运行校验都在源码里，不是纯静态 mock。",
+        "两者共用同一套前端模块，差别主要是数据来源和部署方式。"
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "我在这里做的取舍"
+    },
+    {
+      "type": "paragraph",
+      "text": "第一，复杂交互交给成熟库：OpenLayers 负责地图，React Flow 负责图编辑，Ant Design 负责表格、表单和抽屉。项目的工作量放在业务结构和数据怎么传上，而不是重复造底层交互。"
+    },
+    {
+      "type": "paragraph",
+      "text": "第二，前后端都保留类型和契约。前端即时提示用户节点状态，后端用 Pydantic schema 和 validation 做最终判断。这样页面体验和数据安全不会只押在其中一端。"
+    },
+    {
+      "type": "paragraph",
+      "text": "第三，页面之间只传 id。比如 dataset_version_id、roi_id、model_version_id，而不是到处传文件路径或大对象。这样以后接训练、推理和结果管理时会更容易扩展。"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "继续扩展的方向"
+    },
+    {
+      "type": "list",
+      "items": [
+        "把流程运行从同步示例扩展成队列任务，JobLog 继续记录节点级日志和失败原因。",
+        "给地图预览补更完整的 GeoTIFF/COG 支持，前端只需要读取 TileJSON 和图层信息。",
+        "把模型版本和视觉任务更紧密地接到节点目录里，比如分割、检测、变化检测分别需要什么输入、会产生什么结果。",
+        "补充项目运行 GIF：数据集进入地图页面、选区交给流程页面、流程保存并生成版本。"
+      ]
+    }
+  ]
+}
