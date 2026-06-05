@@ -271,7 +271,7 @@ func Data() SiteData {
 					"参与无人机遥感影像和田间采样数据处理，围绕 PROSAIL 反演和迁移学习开展算法优化实验。",
 					"负责算法与无人机系统的数据流程对接和验证，检查算法能否用于真实农田任务。",
 				},
-				Impact: "体现长期科研项目经验和真实农田数据处理能力。",
+				Impact: "长期处理真实农田数据，关注算法结果能否落到具体任务里。",
 			},
 		},
 		Research: []ResearchItem{
@@ -291,10 +291,10 @@ func Data() SiteData {
 		Coding: CodingProfile{
 			Headline: "算法训练与工程节奏",
 			Metrics: []CodingMetric{
-				{Label: "LeetCode 题量", Value: "--", Unit: "题", Trend: "预留公开主页同步位"},
+				{Label: "LeetCode 题量", Value: "--", Unit: "题", Trend: "预留同步位置"},
 				{Label: "连续打卡", Value: "--", Unit: "天", Trend: "可接入打卡记录"},
 				{Label: "工程提交节奏", Value: "周更", Unit: "", Trend: "项目与论文并行迭代"},
-				{Label: "重点题型", Value: "DP / 图 / 数组", Unit: "", Trend: "面向后端笔试场景"},
+				{Label: "重点题型", Value: "DP / 图 / 数组", Unit: "", Trend: "保持基础题手感"},
 			},
 			Tracks: []CodingTrack{
 				{Name: "数据结构基础", Progress: 88, Note: "数组、链表、哈希、栈队列"},
@@ -328,7 +328,7 @@ func Data() SiteData {
 				Title: "Go 后端如何承载个人主页数据 API",
 				Type:  "Engineering Note",
 				Tags:  []string{"Go", "net/http", "SSE"},
-				Brief: "用轻量服务提供结构化简历数据、实时状态流和前端静态托管。",
+				Brief: "用轻量服务提供结构化站点数据、实时状态流和前端静态托管。",
 			},
 			{
 				Title: "遥感数据平台的模块拆解",

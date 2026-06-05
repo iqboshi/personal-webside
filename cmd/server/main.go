@@ -133,7 +133,7 @@ func handleStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 
 	signals := []profile.Signal{
-		{Level: "go-api", Label: "Profile API", Detail: "JSON resume graph served from Go net/http", Progress: 96},
+		{Level: "go-api", Label: "Profile API", Detail: "JSON site data served from Go net/http", Progress: 96},
 		{Level: "cv", Label: "Vision Pipeline", Detail: "Remote sensing image tasks mapped to model outputs", Progress: 88},
 		{Level: "rl-llm", Label: "Decision Replay", Detail: "Agent trajectory and reasoning states are structured for playback", Progress: 82},
 		{Level: "workflow", Label: "Data Platform", Detail: "Assets, maps, workflows and model products stay connected", Progress: 91},

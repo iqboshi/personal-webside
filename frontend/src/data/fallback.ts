@@ -10,7 +10,7 @@ export const fallbackProfile: SiteData = {
     location: '北京 海淀区',
     intentions: ['软件开发', '后端开发', '数据处理', 'AI应用开发'],
     summary:
-      '中国农业大学计算机科学与技术学术型硕士，具备央企算法实习和国家科研项目经历。熟悉 Python、Go、Java、SQL，具备平台开发、数据处理、接口对接和可视化实践。',
+      '中国农业大学计算机科学与技术学术型硕士，长期关注深度学习视觉、数据处理和工程化工具。熟悉 Python、Go、Java、SQL，做过平台开发、接口对接和可视化实践。',
   },
   hero: {
     eyebrow: 'Computer Science Graduate Student',
