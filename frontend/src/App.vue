@@ -36,6 +36,7 @@ interface CalendarCell {
   isToday: boolean
   isFuture: boolean
   checked: boolean
+  hasNote: boolean
 }
 
 interface ReaderSection {
@@ -67,6 +68,7 @@ interface WorkLink {
 }
 
 const CHECKIN_STORAGE_KEY = 'mengqing-homepage-checkins'
+const CHECKIN_NOTES_STORAGE_KEY = 'mengqing-homepage-checkin-notes'
 const today = new Date()
 const todayKey = formatDateKey(today)
 const weekdayLabels = ['一', '二', '三', '四', '五', '六', '日']
@@ -82,6 +84,9 @@ const navFloating = ref(false)
 const openPanel = ref<'contact' | 'works' | null>(null)
 const clickBubbles = ref<ClickBubble[]>([])
 const checkedDays = ref<string[]>([])
+const checkinNotes = ref<Record<string, string>>({})
+const selectedCheckinDate = ref(todayKey)
+const checkinNoteDraft = ref('')
 const calendarMonth = ref(new Date(today.getFullYear(), today.getMonth(), 1))
 const currentPath = ref(stripBasePath(window.location.pathname))
 
@@ -192,8 +197,20 @@ const routePostSlug = computed(() => {
 const checkedDaySet = computed(() => new Set(checkedDays.value))
 const monthTitle = computed(() => `${calendarMonth.value.getFullYear()} 年 ${calendarMonth.value.getMonth() + 1} 月`)
 const isTodayChecked = computed(() => checkedDaySet.value.has(todayKey))
-const calendarCells = computed(() => buildCalendarCells(calendarMonth.value, checkedDaySet.value))
+const calendarCells = computed(() => buildCalendarCells(calendarMonth.value, checkedDaySet.value, checkinNotes.value))
 const monthlyCheckins = computed(() => calendarCells.value.filter((cell) => cell.isCurrentMonth && cell.checked).length)
+const selectedCheckinChecked = computed(() => checkedDaySet.value.has(selectedCheckinDate.value))
+const selectedCheckinHasNote = computed(() => Boolean(checkinNotes.value[selectedCheckinDate.value]))
+const selectedCheckinIsToday = computed(() => selectedCheckinDate.value === todayKey)
+const canEditSelectedCheckin = computed(() => selectedCheckinDate.value <= todayKey)
+const canClearCheckinDraft = computed(() => Boolean(checkinNoteDraft.value.trim() || selectedCheckinHasNote.value))
+const selectedCheckinTitle = computed(() => formatCheckinDate(selectedCheckinDate.value))
+const checkinSaveLabel = computed(() => {
+  if (!selectedCheckinChecked.value) {
+    return selectedCheckinIsToday.value ? '签到并保存' : '补记并签到'
+  }
+  return '保存笔记'
+})
 const isNextMonthDisabled = computed(() => {
   const year = calendarMonth.value.getFullYear()
   const month = calendarMonth.value.getMonth()
@@ -318,7 +335,14 @@ function formatDateKey(date: Date) {
   return `${year}-${month}-${day}`
 }
 
-function buildCalendarCells(monthDate: Date, checkedSet: Set<string>): CalendarCell[] {
+function formatCheckinDate(key: string) {
+  const match = key.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!match) return key
+
+  return `${match[1]} / ${match[2]} / ${match[3]}`
+}
+
+function buildCalendarCells(monthDate: Date, checkedSet: Set<string>, notes: Record<string, string>): CalendarCell[] {
   const year = monthDate.getFullYear()
   const month = monthDate.getMonth()
   const firstDay = new Date(year, month, 1)
@@ -336,6 +360,7 @@ function buildCalendarCells(monthDate: Date, checkedSet: Set<string>): CalendarC
       isToday: key === todayKey,
       isFuture: key > todayKey,
       checked: checkedSet.has(key),
+      hasNote: Boolean(notes[key]),
     }
   })
 }
@@ -364,15 +389,80 @@ function saveCheckins() {
   }
 }
 
-function checkInToday() {
-  if (isTodayChecked.value) {
-    ElMessage.info('今天已经签到')
+function loadCheckinNotes() {
+  try {
+    const raw = window.localStorage.getItem(CHECKIN_NOTES_STORAGE_KEY)
+    if (!raw) return
+
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return
+
+    const nextNotes: Record<string, string> = {}
+    Object.entries(parsed).forEach(([key, value]) => {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(key) || typeof value !== 'string') return
+
+      const note = value.trim()
+      if (note) nextNotes[key] = note.slice(0, 240)
+    })
+    checkinNotes.value = nextNotes
+    checkinNoteDraft.value = nextNotes[selectedCheckinDate.value] || ''
+  } catch (error) {
+    console.warn(error)
+  }
+}
+
+function saveCheckinNotes() {
+  try {
+    window.localStorage.setItem(CHECKIN_NOTES_STORAGE_KEY, JSON.stringify(checkinNotes.value))
+  } catch (error) {
+    console.warn(error)
+  }
+}
+
+function markCheckin(key: string) {
+  checkedDays.value = Array.from(new Set([...checkedDays.value, key])).sort().slice(-366)
+  saveCheckins()
+}
+
+function selectCheckinDay(cell: CalendarCell) {
+  selectedCheckinDate.value = cell.key
+  checkinNoteDraft.value = checkinNotes.value[cell.key] || ''
+}
+
+function saveSelectedCheckin() {
+  if (!canEditSelectedCheckin.value) {
+    ElMessage.warning('未来日期暂不能记录')
     return
   }
 
-  checkedDays.value = Array.from(new Set([...checkedDays.value, todayKey])).sort()
-  saveCheckins()
-  ElMessage.success('签到成功')
+  const note = checkinNoteDraft.value.trim()
+  const nextNotes = { ...checkinNotes.value }
+  if (note) {
+    nextNotes[selectedCheckinDate.value] = note.slice(0, 240)
+  } else {
+    delete nextNotes[selectedCheckinDate.value]
+  }
+  checkinNotes.value = nextNotes
+  saveCheckinNotes()
+
+  if (!selectedCheckinChecked.value) {
+    markCheckin(selectedCheckinDate.value)
+  }
+
+  ElMessage.success(note ? '记录已保存' : '签到已保存')
+}
+
+function clearSelectedCheckinNote() {
+  if (!canEditSelectedCheckin.value) return
+
+  checkinNoteDraft.value = ''
+  if (!selectedCheckinHasNote.value) return
+
+  const nextNotes = { ...checkinNotes.value }
+  delete nextNotes[selectedCheckinDate.value]
+  checkinNotes.value = nextNotes
+  saveCheckinNotes()
+  ElMessage.success('笔记已清空')
 }
 
 function changeCalendarMonth(offset: number) {
@@ -558,6 +648,7 @@ function spawnClickBubble(event: PointerEvent) {
 onMounted(() => {
   loadInitialData()
   loadCheckins()
+  loadCheckinNotes()
   lastScrollY = window.scrollY
   updateNavOnScroll()
   window.addEventListener('keydown', handleKeydown)
@@ -985,23 +1076,49 @@ onUnmounted(() => {
                 muted: !cell.isCurrentMonth,
                 today: cell.isToday,
                 checked: cell.checked,
+                selected: cell.key === selectedCheckinDate,
+                noted: cell.hasNote,
                 future: cell.isFuture,
               }"
-              :disabled="!cell.isToday || cell.checked"
-              :title="`${cell.key}${cell.checked ? ' 已签到' : ''}`"
+              :disabled="cell.isFuture"
+              :title="`${cell.key}${cell.checked ? ' 已签到' : ''}${cell.hasNote ? ' 有笔记' : ''}`"
               type="button"
-              :aria-label="`${cell.key}${cell.checked ? ' 已签到' : ' 未签到'}`"
-              @click="checkInToday"
+              :aria-label="`${cell.key}${cell.checked ? ' 已签到' : ' 未签到'}${cell.hasNote ? '，有笔记' : ''}`"
+              @click="selectCheckinDay(cell)"
             >
               <el-icon v-if="cell.checked"><Check /></el-icon>
               <span v-else>{{ cell.day }}</span>
             </button>
           </div>
 
-          <button class="checkin-action" type="button" :disabled="isTodayChecked" @click="checkInToday">
-            <el-icon><Calendar /></el-icon>
-            <span>{{ isTodayChecked ? '今天已签到' : '今日签到' }}</span>
-          </button>
+          <div class="checkin-note-editor">
+            <div class="note-editor-head">
+              <div>
+                <span>{{ selectedCheckinTitle }}</span>
+                <strong>{{ selectedCheckinChecked ? '已签到' : '未签到' }}</strong>
+              </div>
+              <small>{{ selectedCheckinHasNote ? '有笔记' : '可记录当天内容' }}</small>
+            </div>
+            <textarea
+              v-model="checkinNoteDraft"
+              :disabled="!canEditSelectedCheckin"
+              maxlength="240"
+              rows="4"
+              placeholder="写一点当天的练习、错题、阅读或项目进展。"
+            ></textarea>
+            <div class="note-editor-actions">
+              <small>{{ checkinNoteDraft.length }} / 240</small>
+              <div>
+                <button type="button" :disabled="!canEditSelectedCheckin || !canClearCheckinDraft" @click="clearSelectedCheckinNote">
+                  清空
+                </button>
+                <button class="checkin-action" type="button" :disabled="!canEditSelectedCheckin" @click="saveSelectedCheckin">
+                  <el-icon><Calendar /></el-icon>
+                  <span>{{ checkinSaveLabel }}</span>
+                </button>
+              </div>
+            </div>
+          </div>
         </section>
       </aside>
     </div>
