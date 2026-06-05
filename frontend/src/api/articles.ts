@@ -1,20 +1,21 @@
 import type { Article } from '../types'
+import { staticAssetPath } from '../url'
+import { HttpError, requestJSON, requestWithStaticFallback } from './request'
 
 export async function fetchArticles(): Promise<Article[]> {
-  const response = await fetch('/api/articles')
-  if (!response.ok) {
-    throw new Error(`Articles API failed: ${response.status}`)
-  }
-  return response.json()
+  return requestWithStaticFallback<Article[]>('/api/articles', 'data/articles.json')
 }
 
 export async function fetchArticle(slug: string): Promise<Article | null> {
-  const response = await fetch(`/api/articles/${encodeURIComponent(slug)}`)
-  if (response.status === 404) {
-    return null
+  const encodedSlug = encodeURIComponent(slug)
+  try {
+    return await requestJSON<Article>(`/api/articles/${encodedSlug}`)
+  } catch (apiError) {
+    try {
+      return await requestJSON<Article>(staticAssetPath(`data/articles/${encodedSlug}.json`))
+    } catch (staticError) {
+      if (apiError instanceof HttpError && apiError.status === 404) return null
+      throw staticError
+    }
   }
-  if (!response.ok) {
-    throw new Error(`Article API failed: ${response.status}`)
-  }
-  return response.json()
 }

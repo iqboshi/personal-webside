@@ -19,6 +19,7 @@ import { fetchArticle, fetchArticles } from './api/articles'
 import { fetchProfile } from './api/profile'
 import { fallbackProfile } from './data/fallback'
 import type { Article, ArticleBlock, Project, SiteData } from './types'
+import { staticAssetPath, stripBasePath, withBasePath } from './url'
 
 interface ClickBubble {
   id: number
@@ -81,7 +82,7 @@ const openPanel = ref<'contact' | 'works' | null>(null)
 const clickBubbles = ref<ClickBubble[]>([])
 const checkedDays = ref<string[]>([])
 const calendarMonth = ref(new Date(today.getFullYear(), today.getMonth(), 1))
-const currentPath = ref(window.location.pathname)
+const currentPath = ref(stripBasePath(window.location.pathname))
 
 let lastScrollY = 0
 let scrollTicking = false
@@ -382,7 +383,11 @@ function changeCalendarMonth(offset: number) {
 }
 
 function postHref(article: Article) {
-  return `/post/${encodeURIComponent(article.slug)}`
+  return withBasePath(`/post/${encodeURIComponent(article.slug)}`)
+}
+
+function mediaSrc(path?: string) {
+  return staticAssetPath(path || '')
 }
 
 function safeDecode(value: string) {
@@ -414,7 +419,7 @@ function switchArticle(article: Article | null) {
 
   selectedArticle.value = article
   window.history.pushState({}, '', postHref(article))
-  currentPath.value = window.location.pathname
+  currentPath.value = stripBasePath(window.location.pathname)
   window.scrollTo({ top: 0, behavior: 'smooth' })
 }
 
@@ -508,7 +513,7 @@ function handleKeydown(event: KeyboardEvent) {
 }
 
 function syncCurrentPath() {
-  currentPath.value = window.location.pathname
+  currentPath.value = stripBasePath(window.location.pathname)
   void syncSelectedArticleFromRoute()
 }
 
@@ -588,7 +593,7 @@ onUnmounted(() => {
 
     <div v-if="selectedArticle" class="reader-shell">
       <aside class="reader-sidebar">
-        <a class="reader-back" href="/">
+        <a class="reader-back" :href="withBasePath('/')">
           <el-icon><ArrowLeft /></el-icon>
           <span>返回主页</span>
         </a>
@@ -642,7 +647,12 @@ onUnmounted(() => {
             </ul>
 
             <figure v-else-if="block.type === 'image'" class="reader-media">
-              <img :src="block.src" :alt="block.alt || block.caption || selectedArticle.title" loading="eager" decoding="async" />
+              <img
+                :src="mediaSrc(block.src)"
+                :alt="block.alt || block.caption || selectedArticle.title"
+                loading="eager"
+                decoding="async"
+              />
               <figcaption v-if="block.caption">{{ block.caption }}</figcaption>
             </figure>
 
@@ -691,7 +701,7 @@ onUnmounted(() => {
     </div>
 
     <section v-else class="post-missing">
-      <a class="reader-back" href="/">
+      <a class="reader-back" :href="withBasePath('/')">
         <el-icon><ArrowLeft /></el-icon>
         <span>返回主页</span>
       </a>

@@ -1,11 +1,8 @@
 import type { Signal, SiteData } from '../types'
+import { requestWithStaticFallback } from './request'
 
 export async function fetchProfile(): Promise<SiteData> {
-  const response = await fetch('/api/profile')
-  if (!response.ok) {
-    throw new Error(`Profile API failed: ${response.status}`)
-  }
-  return response.json()
+  return requestWithStaticFallback<SiteData>('/api/profile', 'data/profile.json')
 }
 
 export function subscribeSignals(onSignal: (signal: Signal) => void): () => void {
@@ -21,4 +18,3 @@ export function subscribeSignals(onSignal: (signal: Signal) => void): () => void
 
   return () => source.close()
 }
-
