@@ -383,7 +383,7 @@ function changeCalendarMonth(offset: number) {
 }
 
 function postHref(article: Article) {
-  return withBasePath(`/post/${encodeURIComponent(article.slug)}`)
+  return withBasePath(`/post/${encodeURIComponent(article.slug)}/`)
 }
 
 function mediaSrc(path?: string) {

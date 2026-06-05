@@ -48,6 +48,11 @@ jobs:
       - name: Prepare Pages files
         run: |
           cp frontend/dist/index.html frontend/dist/404.html
+          for article in frontend/public/data/articles/*.json; do
+            slug="$(basename "$article" .json)"
+            mkdir -p "frontend/dist/post/$slug"
+            cp frontend/dist/index.html "frontend/dist/post/$slug/index.html"
+          done
           touch frontend/dist/.nojekyll
 
       - name: Publish gh-pages branch
