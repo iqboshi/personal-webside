@@ -70,6 +70,7 @@ const CHECKIN_STORAGE_KEY = 'mengqing-homepage-checkins'
 const today = new Date()
 const todayKey = formatDateKey(today)
 const weekdayLabels = ['一', '二', '三', '四', '五', '六', '日']
+const avatarSrc = staticAssetPath('/assets/avatar.jpg')
 
 const profile = ref<SiteData>(fallbackProfile)
 const articles = ref<Article[]>([])
@@ -598,7 +599,7 @@ onUnmounted(() => {
           <span>返回主页</span>
         </a>
         <div class="reader-author">
-          <span>ZMQ</span>
+          <img class="reader-avatar" :src="avatarSrc" :alt="`${profile.person.name} avatar`" />
           <div>
             <strong>{{ profile.person.name }}</strong>
             <small>{{ selectedArticle.category }} / {{ readerReadTime }}</small>
@@ -744,7 +745,7 @@ onUnmounted(() => {
     <div id="top" class="blog-shell">
       <aside class="left-rail">
         <section id="about" class="profile-card">
-          <div class="initial-mark">ZMQ</div>
+          <img class="initial-mark profile-avatar" :src="avatarSrc" :alt="`${profile.person.name} avatar`" />
           <p class="hello">Hello, I am</p>
           <h1>{{ profile.person.name }}</h1>
           <p class="direction">{{ direction }}</p>
