@@ -87,6 +87,7 @@ const checkedDays = ref<string[]>([])
 const checkinNotes = ref<Record<string, string>>({})
 const selectedCheckinDate = ref(todayKey)
 const checkinNoteDraft = ref('')
+const isCheckinDialogOpen = ref(false)
 const calendarMonth = ref(new Date(today.getFullYear(), today.getMonth(), 1))
 const currentPath = ref(stripBasePath(window.location.pathname))
 
@@ -427,6 +428,11 @@ function markCheckin(key: string) {
 function selectCheckinDay(cell: CalendarCell) {
   selectedCheckinDate.value = cell.key
   checkinNoteDraft.value = checkinNotes.value[cell.key] || ''
+  isCheckinDialogOpen.value = true
+}
+
+function closeCheckinDialog() {
+  isCheckinDialogOpen.value = false
 }
 
 function saveSelectedCheckin() {
@@ -598,6 +604,10 @@ async function loadInitialData() {
 
 function handleKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape') {
+    if (isCheckinDialogOpen.value) {
+      closeCheckinDialog()
+      return
+    }
     navHidden.value = false
     closePanel()
   }
@@ -1090,38 +1100,48 @@ onUnmounted(() => {
               <span v-else>{{ cell.day }}</span>
             </button>
           </div>
-
-          <div class="checkin-note-editor">
-            <div class="note-editor-head">
-              <div>
-                <span>{{ selectedCheckinTitle }}</span>
-                <strong>{{ selectedCheckinChecked ? '已签到' : '未签到' }}</strong>
-              </div>
-              <small>{{ selectedCheckinHasNote ? '有笔记' : '可记录当天内容' }}</small>
-            </div>
-            <textarea
-              v-model="checkinNoteDraft"
-              :disabled="!canEditSelectedCheckin"
-              maxlength="240"
-              rows="4"
-              placeholder="写一点当天的练习、错题、阅读或项目进展。"
-            ></textarea>
-            <div class="note-editor-actions">
-              <small>{{ checkinNoteDraft.length }} / 240</small>
-              <div>
-                <button type="button" :disabled="!canEditSelectedCheckin || !canClearCheckinDraft" @click="clearSelectedCheckinNote">
-                  清空
-                </button>
-                <button class="checkin-action" type="button" :disabled="!canEditSelectedCheckin" @click="saveSelectedCheckin">
-                  <el-icon><Calendar /></el-icon>
-                  <span>{{ checkinSaveLabel }}</span>
-                </button>
-              </div>
-            </div>
-          </div>
         </section>
       </aside>
     </div>
+
+    <transition name="checkin-dialog">
+      <div v-if="isCheckinDialogOpen" class="checkin-dialog-backdrop" @click.self="closeCheckinDialog">
+        <section
+          class="checkin-dialog checkin-note-editor"
+          role="dialog"
+          aria-modal="true"
+          :aria-label="`${selectedCheckinTitle} 签到笔记`"
+        >
+          <button class="checkin-dialog-close" type="button" aria-label="关闭签到笔记" @click="closeCheckinDialog">×</button>
+          <div class="note-editor-head">
+            <div>
+              <span>{{ selectedCheckinTitle }}</span>
+              <strong>{{ selectedCheckinChecked ? '已签到' : '未签到' }}</strong>
+            </div>
+            <small>{{ selectedCheckinHasNote ? '有笔记' : '可记录当天内容' }}</small>
+          </div>
+          <textarea
+            v-model="checkinNoteDraft"
+            :disabled="!canEditSelectedCheckin"
+            maxlength="240"
+            rows="5"
+            placeholder="写一点当天的练习、错题、阅读或项目进展。"
+          ></textarea>
+          <div class="note-editor-actions">
+            <small>{{ checkinNoteDraft.length }} / 240</small>
+            <div>
+              <button type="button" :disabled="!canEditSelectedCheckin || !canClearCheckinDraft" @click="clearSelectedCheckinNote">
+                清空
+              </button>
+              <button class="checkin-action" type="button" :disabled="!canEditSelectedCheckin" @click="saveSelectedCheckin">
+                <el-icon><Calendar /></el-icon>
+                <span>{{ checkinSaveLabel }}</span>
+              </button>
+            </div>
+          </div>
+        </section>
+      </div>
+    </transition>
 
     <footer class="site-footer">
       <span>© 2026 {{ profile.person.english }}. Built with Go and Vue.</span>
