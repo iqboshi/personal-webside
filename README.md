@@ -140,6 +140,44 @@ CORS_ALLOWED_ORIGINS=https://iqboshi.github.io
 
 Supabase 的建表 SQL 在 `supabase/checkins.sql`。后端启动时也会自动创建这张表。
 
+## Render 免费部署
+
+仓库根目录已经包含 `render.yaml`，可以直接用 Render Blueprint 部署 Go API：
+
+1. 进入 Render Dashboard。
+2. 选择 `New -> Blueprint`。
+3. 绑定 GitHub 仓库 `iqboshi/personal-webside`。
+4. Render 会读取 `render.yaml` 并创建 `personal-webside-api`。
+5. 按提示填写这些环境变量：
+
+```text
+DATABASE_URL=<Supabase Postgres 连接串>
+ADMIN_USERNAME=<管理员账号>
+ADMIN_PASSWORD=<管理员密码>
+```
+
+`SESSION_SECRET` 会由 Render 自动生成。部署完成后会得到一个类似这样的 API 地址：
+
+```text
+https://personal-webside-api.onrender.com
+```
+
+然后到 GitHub 仓库：
+
+```text
+Settings -> Secrets and variables -> Actions -> Variables
+```
+
+添加或更新：
+
+```text
+VITE_API_BASE_URL=https://personal-webside-api.onrender.com
+```
+
+最后重新运行 `Deploy Pages` 工作流，GitHub Pages 上的签到日历就会请求这个线上 Go API。
+
+Render 免费 Web Service 空闲 15 分钟后会休眠，第一次访问可能需要等待一会儿。因为签到数据写在 Supabase，所以休眠和重启不会丢数据。
+
 本地 Docker 运行示例：
 
 ```powershell
