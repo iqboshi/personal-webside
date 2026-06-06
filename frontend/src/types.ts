@@ -174,3 +174,16 @@ export interface Signal {
   progress: number
   timestamp: string
 }
+
+export interface Checkin {
+  date: string
+  note: string
+  checkedAt: string
+  updatedAt: string
+}
+
+export interface AdminSession {
+  authenticated: boolean
+  username?: string
+  token?: string
+}

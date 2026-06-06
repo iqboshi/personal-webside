@@ -1,5 +1,7 @@
 import { staticAssetPath } from '../url'
 
+const rawApiBaseUrl = (import.meta.env.VITE_API_BASE_URL || '').trim().replace(/\/$/, '')
+
 export class HttpError extends Error {
   status: number
 
@@ -10,10 +12,19 @@ export class HttpError extends Error {
   }
 }
 
-export async function requestJSON<T>(url: string): Promise<T> {
-  const response = await fetch(url)
+export function apiURL(path: string): string {
+  if (!path.startsWith('/api/')) return path
+  return rawApiBaseUrl ? `${rawApiBaseUrl}${path}` : path
+}
+
+export async function requestJSON<T>(url: string, init?: RequestInit): Promise<T> {
+  const requestUrl = apiURL(url)
+  const response = await fetch(requestUrl, {
+    ...init,
+    credentials: url.startsWith('/api/') ? 'include' : init?.credentials,
+  })
   if (!response.ok) {
-    throw new HttpError(`${url} failed: ${response.status}`, response.status)
+    throw new HttpError(`${requestUrl} failed: ${response.status}`, response.status)
   }
   return response.json()
 }

@@ -16,9 +16,10 @@ import {
 import hljs from 'highlight.js/lib/common'
 
 import { fetchArticle, fetchArticles } from './api/articles'
+import { fetchAdminSession, fetchCheckins, loginAdmin, logoutAdmin, saveCheckin as saveCheckinEntry } from './api/checkins'
 import { fetchProfile } from './api/profile'
 import { fallbackProfile } from './data/fallback'
-import type { Article, ArticleBlock, Project, SiteData } from './types'
+import type { AdminSession, Article, ArticleBlock, Checkin, Project, SiteData } from './types'
 import { staticAssetPath, stripBasePath, withBasePath } from './url'
 
 interface ClickBubble {
@@ -67,8 +68,6 @@ interface WorkLink {
   stack: string[]
 }
 
-const CHECKIN_STORAGE_KEY = 'mengqing-homepage-checkins'
-const CHECKIN_NOTES_STORAGE_KEY = 'mengqing-homepage-checkin-notes'
 const today = new Date()
 const todayKey = formatDateKey(today)
 const weekdayLabels = ['一', '二', '三', '四', '五', '六', '日']
@@ -85,9 +84,17 @@ const openPanel = ref<'contact' | 'works' | null>(null)
 const clickBubbles = ref<ClickBubble[]>([])
 const checkedDays = ref<string[]>([])
 const checkinNotes = ref<Record<string, string>>({})
+const checkinLoading = ref(false)
+const checkinSaving = ref(false)
+const checkinApiReady = ref(true)
 const selectedCheckinDate = ref(todayKey)
 const checkinNoteDraft = ref('')
 const isCheckinDialogOpen = ref(false)
+const isAdminLoginOpen = ref(false)
+const adminLoginLoading = ref(false)
+const adminUsername = ref('admin')
+const adminPassword = ref('')
+const adminSession = ref<AdminSession>({ authenticated: false })
 const calendarMonth = ref(new Date(today.getFullYear(), today.getMonth(), 1))
 const currentPath = ref(stripBasePath(window.location.pathname))
 
@@ -203,14 +210,29 @@ const monthlyCheckins = computed(() => calendarCells.value.filter((cell) => cell
 const selectedCheckinChecked = computed(() => checkedDaySet.value.has(selectedCheckinDate.value))
 const selectedCheckinHasNote = computed(() => Boolean(checkinNotes.value[selectedCheckinDate.value]))
 const selectedCheckinIsToday = computed(() => selectedCheckinDate.value === todayKey)
-const canEditSelectedCheckin = computed(() => selectedCheckinDate.value <= todayKey)
-const canClearCheckinDraft = computed(() => Boolean(checkinNoteDraft.value.trim() || selectedCheckinHasNote.value))
+const canEditSelectedDate = computed(() => selectedCheckinDate.value <= todayKey)
+const canWriteSelectedCheckin = computed(
+  () => checkinApiReady.value && adminSession.value.authenticated && canEditSelectedDate.value && !checkinSaving.value,
+)
+const canClearCheckinDraft = computed(() => canWriteSelectedCheckin.value && Boolean(checkinNoteDraft.value.trim() || selectedCheckinHasNote.value))
 const selectedCheckinTitle = computed(() => formatCheckinDate(selectedCheckinDate.value))
 const checkinSaveLabel = computed(() => {
   if (!selectedCheckinChecked.value) {
     return selectedCheckinIsToday.value ? '签到并保存' : '补记并签到'
   }
   return '保存笔记'
+})
+const selectedCheckinHint = computed(() => {
+  if (!checkinApiReady.value) return '后端接口未连接'
+  if (!canEditSelectedDate.value) return '未来日期暂不能记录'
+  if (!adminSession.value.authenticated) return selectedCheckinHasNote.value ? '访客只能查看笔记' : '管理员登录后可签到'
+  return selectedCheckinHasNote.value ? '可以继续补充当天记录' : '写下当天的练习、阅读或项目进展'
+})
+const checkinStatusText = computed(() => {
+  if (checkinLoading.value) return '同步中'
+  if (!checkinApiReady.value) return '未连接'
+  if (adminSession.value.authenticated) return '管理员'
+  return isTodayChecked.value ? '已签到' : '今日未签'
 })
 const isNextMonthDisabled = computed(() => {
   const year = calendarMonth.value.getFullYear()
@@ -366,63 +388,68 @@ function buildCalendarCells(monthDate: Date, checkedSet: Set<string>, notes: Rec
   })
 }
 
-function loadCheckins() {
-  try {
-    const raw = window.localStorage.getItem(CHECKIN_STORAGE_KEY)
-    if (!raw) return
+function applyCheckins(items: Checkin[]) {
+  const days = new Set<string>()
+  const notes: Record<string, string> = {}
 
-    const parsed = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return
+  items.forEach((item) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(item.date) || item.date > todayKey) return
 
-    checkedDays.value = parsed
-      .filter((item): item is string => typeof item === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(item))
-      .slice(-366)
-  } catch (error) {
-    console.warn(error)
+    days.add(item.date)
+    const note = item.note.trim()
+    if (note) notes[item.date] = note.slice(0, 240)
+  })
+
+  checkedDays.value = Array.from(days).sort().slice(-500)
+  checkinNotes.value = notes
+  checkinNoteDraft.value = notes[selectedCheckinDate.value] || ''
+}
+
+function applySavedCheckin(item: Checkin) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(item.date)) return
+
+  checkedDays.value = Array.from(new Set([...checkedDays.value, item.date])).sort().slice(-500)
+  const nextNotes = { ...checkinNotes.value }
+  const note = item.note.trim()
+  if (note) {
+    nextNotes[item.date] = note.slice(0, 240)
+  } else {
+    delete nextNotes[item.date]
+  }
+  checkinNotes.value = nextNotes
+  if (selectedCheckinDate.value === item.date) {
+    checkinNoteDraft.value = nextNotes[item.date] || ''
   }
 }
 
-function saveCheckins() {
+async function loadCheckinsFromAPI(showMessage = false) {
+  checkinLoading.value = true
   try {
-    window.localStorage.setItem(CHECKIN_STORAGE_KEY, JSON.stringify(checkedDays.value))
+    applyCheckins(await fetchCheckins())
+    checkinApiReady.value = true
+    if (showMessage) ElMessage.success('签到数据已同步')
   } catch (error) {
     console.warn(error)
+    checkinApiReady.value = false
+    checkedDays.value = []
+    checkinNotes.value = {}
+    if (showMessage) {
+      ElMessage.warning('签到接口暂不可用')
+    }
+  } finally {
+    checkinLoading.value = false
   }
 }
 
-function loadCheckinNotes() {
+async function loadAdminSession() {
+  if (!checkinApiReady.value) return
+
   try {
-    const raw = window.localStorage.getItem(CHECKIN_NOTES_STORAGE_KEY)
-    if (!raw) return
-
-    const parsed = JSON.parse(raw)
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return
-
-    const nextNotes: Record<string, string> = {}
-    Object.entries(parsed).forEach(([key, value]) => {
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(key) || typeof value !== 'string') return
-
-      const note = value.trim()
-      if (note) nextNotes[key] = note.slice(0, 240)
-    })
-    checkinNotes.value = nextNotes
-    checkinNoteDraft.value = nextNotes[selectedCheckinDate.value] || ''
+    adminSession.value = await fetchAdminSession()
   } catch (error) {
     console.warn(error)
+    adminSession.value = { authenticated: false }
   }
-}
-
-function saveCheckinNotes() {
-  try {
-    window.localStorage.setItem(CHECKIN_NOTES_STORAGE_KEY, JSON.stringify(checkinNotes.value))
-  } catch (error) {
-    console.warn(error)
-  }
-}
-
-function markCheckin(key: string) {
-  checkedDays.value = Array.from(new Set([...checkedDays.value, key])).sort().slice(-366)
-  saveCheckins()
 }
 
 function selectCheckinDay(cell: CalendarCell) {
@@ -431,44 +458,93 @@ function selectCheckinDay(cell: CalendarCell) {
   isCheckinDialogOpen.value = true
 }
 
-function closeCheckinDialog() {
-  isCheckinDialogOpen.value = false
-}
-
-function saveSelectedCheckin() {
-  if (!canEditSelectedCheckin.value) {
-    ElMessage.warning('未来日期暂不能记录')
+function openAdminLogin() {
+  if (!checkinApiReady.value) {
+    ElMessage.warning('后端接口未连接')
     return
   }
 
-  const note = checkinNoteDraft.value.trim()
-  const nextNotes = { ...checkinNotes.value }
-  if (note) {
-    nextNotes[selectedCheckinDate.value] = note.slice(0, 240)
-  } else {
-    delete nextNotes[selectedCheckinDate.value]
-  }
-  checkinNotes.value = nextNotes
-  saveCheckinNotes()
-
-  if (!selectedCheckinChecked.value) {
-    markCheckin(selectedCheckinDate.value)
-  }
-
-  ElMessage.success(note ? '记录已保存' : '签到已保存')
+  selectedCheckinDate.value = todayKey
+  checkinNoteDraft.value = checkinNotes.value[todayKey] || ''
+  isCheckinDialogOpen.value = true
+  isAdminLoginOpen.value = true
 }
 
-function clearSelectedCheckinNote() {
-  if (!canEditSelectedCheckin.value) return
+function closeCheckinDialog() {
+  isCheckinDialogOpen.value = false
+  isAdminLoginOpen.value = false
+}
+
+async function saveSelectedCheckin() {
+  if (!canEditSelectedDate.value) {
+    ElMessage.warning('未来日期暂不能记录')
+    return
+  }
+  if (!checkinApiReady.value) {
+    ElMessage.warning('后端接口未连接')
+    return
+  }
+  if (!adminSession.value.authenticated) {
+    isAdminLoginOpen.value = true
+    ElMessage.warning('请先登录管理员账号')
+    return
+  }
+
+  checkinSaving.value = true
+  try {
+    const item = await saveCheckinEntry(selectedCheckinDate.value, checkinNoteDraft.value.trim())
+    applySavedCheckin(item)
+    ElMessage.success(item.note ? '记录已保存' : '签到已保存')
+  } catch (error) {
+    console.warn(error)
+    ElMessage.error('保存失败，请检查登录状态或后端接口')
+  } finally {
+    checkinSaving.value = false
+  }
+}
+
+async function clearSelectedCheckinNote() {
+  if (!canWriteSelectedCheckin.value) {
+    if (!adminSession.value.authenticated) isAdminLoginOpen.value = true
+    return
+  }
 
   checkinNoteDraft.value = ''
-  if (!selectedCheckinHasNote.value) return
+  await saveSelectedCheckin()
+}
 
-  const nextNotes = { ...checkinNotes.value }
-  delete nextNotes[selectedCheckinDate.value]
-  checkinNotes.value = nextNotes
-  saveCheckinNotes()
-  ElMessage.success('笔记已清空')
+async function submitAdminLogin() {
+  if (!checkinApiReady.value) {
+    ElMessage.warning('后端接口未连接')
+    return
+  }
+  if (!adminUsername.value.trim() || !adminPassword.value) {
+    ElMessage.warning('请输入账号和密码')
+    return
+  }
+
+  adminLoginLoading.value = true
+  try {
+    adminSession.value = await loginAdmin(adminUsername.value.trim(), adminPassword.value)
+    adminPassword.value = ''
+    isAdminLoginOpen.value = false
+    ElMessage.success('管理员已登录')
+  } catch (error) {
+    console.warn(error)
+    ElMessage.error('登录失败')
+  } finally {
+    adminLoginLoading.value = false
+  }
+}
+
+async function handleAdminLogout() {
+  try {
+    adminSession.value = await logoutAdmin()
+    ElMessage.success('已退出')
+  } catch (error) {
+    console.warn(error)
+    adminSession.value = { authenticated: false }
+  }
 }
 
 function changeCalendarMonth(offset: number) {
@@ -657,8 +733,8 @@ function spawnClickBubble(event: PointerEvent) {
 
 onMounted(() => {
   loadInitialData()
-  loadCheckins()
-  loadCheckinNotes()
+  loadCheckinsFromAPI()
+  loadAdminSession()
   lastScrollY = window.scrollY
   updateNavOnScroll()
   window.addEventListener('keydown', handleKeydown)
@@ -1049,7 +1125,7 @@ onUnmounted(() => {
               <h2>签到日历</h2>
             </div>
             <div class="heading-side">
-              <span>{{ isTodayChecked ? '已签到' : '今日未签' }}</span>
+              <span>{{ checkinStatusText }}</span>
             </div>
           </div>
 
@@ -1072,6 +1148,12 @@ onUnmounted(() => {
               <span>连续</span>
               <strong>{{ streakDays }} 天</strong>
             </div>
+          </div>
+
+          <div class="checkin-admin-line">
+            <span>{{ adminSession.authenticated ? `已登录 ${adminSession.username || 'admin'}` : '只读模式' }}</span>
+            <button v-if="adminSession.authenticated" type="button" @click="handleAdminLogout">退出</button>
+            <button v-else type="button" @click="openAdminLogin">管理员登录</button>
           </div>
 
           <div class="calendar-weekdays" aria-hidden="true">
@@ -1118,11 +1200,20 @@ onUnmounted(() => {
               <span>{{ selectedCheckinTitle }}</span>
               <strong>{{ selectedCheckinChecked ? '已签到' : '未签到' }}</strong>
             </div>
-            <small>{{ selectedCheckinHasNote ? '有笔记' : '可记录当天内容' }}</small>
+            <small>{{ selectedCheckinHint }}</small>
           </div>
+
+          <form v-if="isAdminLoginOpen && !adminSession.authenticated" class="admin-login-panel" @submit.prevent="submitAdminLogin">
+            <input v-model="adminUsername" autocomplete="username" placeholder="管理员账号" />
+            <input v-model="adminPassword" autocomplete="current-password" placeholder="管理员密码" type="password" />
+            <button type="submit" :disabled="adminLoginLoading">
+              {{ adminLoginLoading ? '登录中' : '登录' }}
+            </button>
+          </form>
+
           <textarea
             v-model="checkinNoteDraft"
-            :disabled="!canEditSelectedCheckin"
+            :readonly="!canWriteSelectedCheckin"
             maxlength="240"
             rows="5"
             placeholder="写一点当天的练习、错题、阅读或项目进展。"
@@ -1130,12 +1221,22 @@ onUnmounted(() => {
           <div class="note-editor-actions">
             <small>{{ checkinNoteDraft.length }} / 240</small>
             <div>
-              <button type="button" :disabled="!canEditSelectedCheckin || !canClearCheckinDraft" @click="clearSelectedCheckinNote">
+              <button type="button" :disabled="!canClearCheckinDraft" @click="clearSelectedCheckinNote">
                 清空
               </button>
-              <button class="checkin-action" type="button" :disabled="!canEditSelectedCheckin" @click="saveSelectedCheckin">
+              <button
+                v-if="!adminSession.authenticated"
+                class="checkin-action"
+                type="button"
+                :disabled="!canEditSelectedDate"
+                @click="isAdminLoginOpen = true"
+              >
                 <el-icon><Calendar /></el-icon>
-                <span>{{ checkinSaveLabel }}</span>
+                <span>管理员登录</span>
+              </button>
+              <button v-else class="checkin-action" type="button" :disabled="!canWriteSelectedCheckin" @click="saveSelectedCheckin">
+                <el-icon><Calendar /></el-icon>
+                <span>{{ checkinSaving ? '保存中' : checkinSaveLabel }}</span>
               </button>
             </div>
           </div>
