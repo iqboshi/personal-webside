@@ -1,0 +1,6 @@
+CREATE TABLE IF NOT EXISTS checkins (
+  date_key DATE PRIMARY KEY,
+  note TEXT NOT NULL DEFAULT '',
+  checked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

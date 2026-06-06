@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "modernc.org/sqlite"
 )
 
@@ -28,6 +29,22 @@ type Checkin struct {
 type Store struct {
 	db       *sql.DB
 	location *time.Location
+	dialect  storeDialect
+}
+
+type storeDialect string
+
+const (
+	sqliteDialect   storeDialect = "sqlite"
+	postgresDialect storeDialect = "postgres"
+)
+
+func OpenFromEnv(sqlitePath string) (*Store, error) {
+	dsn := strings.TrimSpace(os.Getenv("DATABASE_URL"))
+	if dsn == "" {
+		return Open(sqlitePath)
+	}
+	return OpenPostgres(dsn)
 }
 
 func Open(path string) (*Store, error) {
@@ -45,7 +62,30 @@ func Open(path string) (*Store, error) {
 		location = time.FixedZone("Asia/Shanghai", 8*60*60)
 	}
 
-	store := &Store{db: db, location: location}
+	store := &Store{db: db, location: location, dialect: sqliteDialect}
+	if err := store.init(context.Background()); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return store, nil
+}
+
+func OpenPostgres(dsn string) (*Store, error) {
+	db, err := sql.Open("pgx", normalizePostgresDSN(dsn))
+	if err != nil {
+		return nil, fmt.Errorf("open postgres: %w", err)
+	}
+
+	db.SetMaxOpenConns(5)
+	db.SetMaxIdleConns(2)
+	db.SetConnMaxLifetime(30 * time.Minute)
+
+	location, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		location = time.FixedZone("Asia/Shanghai", 8*60*60)
+	}
+
+	store := &Store{db: db, location: location, dialect: postgresDialect}
 	if err := store.init(context.Background()); err != nil {
 		db.Close()
 		return nil, err
@@ -58,12 +98,26 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) List(ctx context.Context) ([]Checkin, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	query := `
 		SELECT date_key, note, checked_at, updated_at
 		FROM checkins
 		ORDER BY date_key DESC
 		LIMIT 500
-	`)
+	`
+	if s.dialect == postgresDialect {
+		query = `
+			SELECT
+				to_char(date_key, 'YYYY-MM-DD') AS date_key,
+				note,
+				to_char(checked_at AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD"T"HH24:MI:SS"+08:00"') AS checked_at,
+				to_char(updated_at AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD"T"HH24:MI:SS"+08:00"') AS updated_at
+			FROM checkins
+			ORDER BY date_key DESC
+			LIMIT 500
+		`
+	}
+
+	rows, err := s.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("query checkins: %w", err)
 	}
@@ -94,14 +148,26 @@ func (s *Store) Upsert(ctx context.Context, dateKey string, note string) (Checki
 	}
 
 	now := time.Now().In(s.location).Format(time.RFC3339)
-	if _, err := s.db.ExecContext(ctx, `
-		INSERT INTO checkins (date_key, note, checked_at, updated_at)
-		VALUES (?, ?, ?, ?)
-		ON CONFLICT(date_key) DO UPDATE SET
-			note = excluded.note,
-			updated_at = excluded.updated_at
-	`, dateKey, note, now, now); err != nil {
-		return Checkin{}, fmt.Errorf("upsert checkin %q: %w", dateKey, err)
+	if s.dialect == postgresDialect {
+		if _, err := s.db.ExecContext(ctx, `
+			INSERT INTO checkins (date_key, note, checked_at, updated_at)
+			VALUES ($1::date, $2, now(), now())
+			ON CONFLICT(date_key) DO UPDATE SET
+				note = excluded.note,
+				updated_at = excluded.updated_at
+		`, dateKey, note); err != nil {
+			return Checkin{}, fmt.Errorf("upsert checkin %q: %w", dateKey, err)
+		}
+	} else {
+		if _, err := s.db.ExecContext(ctx, `
+			INSERT INTO checkins (date_key, note, checked_at, updated_at)
+			VALUES (?, ?, ?, ?)
+			ON CONFLICT(date_key) DO UPDATE SET
+				note = excluded.note,
+				updated_at = excluded.updated_at
+		`, dateKey, note, now, now); err != nil {
+			return Checkin{}, fmt.Errorf("upsert checkin %q: %w", dateKey, err)
+		}
 	}
 
 	item, found, err := s.Get(ctx, dateKey)
@@ -115,11 +181,25 @@ func (s *Store) Upsert(ctx context.Context, dateKey string, note string) (Checki
 }
 
 func (s *Store) Get(ctx context.Context, dateKey string) (Checkin, bool, error) {
-	row := s.db.QueryRowContext(ctx, `
+	query := `
 		SELECT date_key, note, checked_at, updated_at
 		FROM checkins
 		WHERE date_key = ?
-	`, dateKey)
+	`
+	args := []any{dateKey}
+	if s.dialect == postgresDialect {
+		query = `
+			SELECT
+				to_char(date_key, 'YYYY-MM-DD') AS date_key,
+				note,
+				to_char(checked_at AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD"T"HH24:MI:SS"+08:00"') AS checked_at,
+				to_char(updated_at AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD"T"HH24:MI:SS"+08:00"') AS updated_at
+			FROM checkins
+			WHERE date_key = $1::date
+		`
+	}
+
+	row := s.db.QueryRowContext(ctx, query, args...)
 
 	var item Checkin
 	err := row.Scan(&item.Date, &item.Note, &item.CheckedAt, &item.UpdatedAt)
@@ -133,6 +213,13 @@ func (s *Store) Get(ctx context.Context, dateKey string) (Checkin, bool, error) 
 }
 
 func (s *Store) init(ctx context.Context) error {
+	if s.dialect == postgresDialect {
+		return s.initPostgres(ctx)
+	}
+	return s.initSQLite(ctx)
+}
+
+func (s *Store) initSQLite(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, `PRAGMA journal_mode = WAL`); err != nil {
 		return fmt.Errorf("set journal mode: %w", err)
 	}
@@ -145,6 +232,23 @@ func (s *Store) init(ctx context.Context) error {
 			note TEXT NOT NULL DEFAULT '',
 			checked_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL
+		)
+	`); err != nil {
+		return fmt.Errorf("create checkins table: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) initPostgres(ctx context.Context) error {
+	if err := s.db.PingContext(ctx); err != nil {
+		return fmt.Errorf("connect postgres: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS checkins (
+			date_key DATE PRIMARY KEY,
+			note TEXT NOT NULL DEFAULT '',
+			checked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 		)
 	`); err != nil {
 		return fmt.Errorf("create checkins table: %w", err)
@@ -169,6 +273,17 @@ func (s *Store) normalizeDateKey(value string) (string, error) {
 		return "", errors.New("future dates cannot be checked in")
 	}
 	return value, nil
+}
+
+func normalizePostgresDSN(dsn string) string {
+	if strings.Contains(dsn, "sslmode=") {
+		return dsn
+	}
+	separator := "?"
+	if strings.Contains(dsn, "?") {
+		separator = "&"
+	}
+	return dsn + separator + "sslmode=require"
 }
 
 func normalizeNote(value string) (string, error) {

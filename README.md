@@ -3,7 +3,7 @@
 Go 后端 + Vue 3 + Element Plus 前端的个人主页，用来记录项目、文章和最近在读内容。
 项目文章由 Go 后端从本地 SQLite 数据库读取，首次启动会自动创建 `data/homepage.db`，并把 `content/articles/*.json` 同步进数据库。
 项目正文使用 `blocks_json` 存储富文本块，支持段落、列表、代码块、图片/GIF 和链接卡片。
-签到日历和每日笔记由 Go API 写入 SQLite；访客只能查看，管理员登录后才能签到和编辑笔记。
+签到日历和每日笔记由 Go API 写入数据库；访客只能查看，管理员登录后才能签到和编辑笔记。未配置 `DATABASE_URL` 时使用本地 SQLite，配置后会写入 Supabase Postgres。
 
 ## 本地运行
 
@@ -32,6 +32,15 @@ $env:ADMIN_USERNAME = "admin"
 $env:ADMIN_PASSWORD = "你的管理员密码"
 $env:SESSION_SECRET = "一段足够长的随机字符串"
 go run ./cmd/server
+```
+
+也可以在本地创建 `tmp/supabase.env`，后端启动时会自动读取。`tmp/` 已被 git 忽略，不会提交：
+
+```env
+DATABASE_URL=postgresql://postgres.<project-ref>:<database-password>@<pooler-host>:5432/postgres?sslmode=require
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=你的管理员密码
+SESSION_SECRET=一段足够长的随机字符串
 ```
 
 也可以不放明文密码，改用 SHA-256：
@@ -97,7 +106,7 @@ go run ./cmd/server
 当前 GitHub Pages 地址是静态前端，不能直接运行 Go 服务或写 SQLite。线上要让签到和每日笔记真正可用，需要拆成两部分：
 
 1. GitHub Pages：继续托管 `frontend/dist`。
-2. Go API：部署到支持后端服务的平台，例如 Render、Railway、Fly.io 或自己的 VPS，并给 SQLite 配一个持久化目录。
+2. Go API：部署到支持后端服务的平台，例如 Render、Railway、Fly.io 或自己的 VPS。签到数据建议接 Supabase Postgres。
 
 前端会读取 `VITE_API_BASE_URL`。例如 Go API 部署到：
 
@@ -121,12 +130,15 @@ VITE_API_BASE_URL=https://personal-webside-api.onrender.com
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=<管理员密码>
 SESSION_SECRET=<一段足够长的随机字符串>
+DATABASE_URL=postgresql://postgres.<project-ref>:<database-password>@<pooler-host>:5432/postgres?sslmode=require
 DB_PATH=/app/data/homepage.db
 CONTENT_DIR=/app/content/articles
 CORS_ALLOWED_ORIGINS=https://iqboshi.github.io
 ```
 
-如果使用 Dockerfile 部署，记得把持久盘挂载到 `/app/data`，这样 `homepage.db` 才不会在重启或重新部署后丢失。
+`DATABASE_URL` 用来保存签到和每日笔记。文章数据库目前仍使用 SQLite，所以如果使用 Dockerfile 部署，建议把持久盘挂载到 `/app/data`，这样 `homepage.db` 才不会在重启或重新部署后丢失。
+
+Supabase 的建表 SQL 在 `supabase/checkins.sql`。后端启动时也会自动创建这张表。
 
 本地 Docker 运行示例：
 

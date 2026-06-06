@@ -26,6 +26,10 @@ import (
 const adminCookieName = "mengqing_admin_session"
 
 func main() {
+	if err := loadEnvFile(envOrDefault("ENV_FILE", "tmp/supabase.env")); err != nil {
+		log.Printf("load env file: %v", err)
+	}
+
 	addr := flag.String("addr", defaultListenAddr(), "HTTP listen address")
 	staticDir := flag.String("static", envOrDefault("STATIC_DIR", "frontend/dist"), "frontend build output directory")
 	dbPath := flag.String("db", envOrDefault("DB_PATH", "data/homepage.db"), "SQLite database path")
@@ -42,7 +46,7 @@ func main() {
 		log.Fatalf("sync article content: %v", err)
 	}
 
-	checkinStore, err := checkins.Open(*dbPath)
+	checkinStore, err := checkins.OpenFromEnv(*dbPath)
 	if err != nil {
 		log.Fatalf("open check-in database: %v", err)
 	}
@@ -568,6 +572,42 @@ func envOrDefault(key string, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func loadEnvFile(path string) error {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+
+	for index, rawLine := range strings.Split(string(content), "\n") {
+		line := strings.TrimSpace(rawLine)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			return fmt.Errorf("%s:%d must be KEY=value", path, index+1)
+		}
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key == "" {
+			return fmt.Errorf("%s:%d has empty key", path, index+1)
+		}
+		if _, exists := os.LookupEnv(key); !exists {
+			os.Setenv(key, strings.Trim(value, `"'`))
+		}
+	}
+	return nil
 }
 
 func logRequests(next http.Handler) http.Handler {
