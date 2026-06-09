@@ -970,7 +970,16 @@ a {
 
 .checkin-card {
   display: grid;
-  gap: 12px;
+  justify-content: center;
+  justify-items: stretch;
+  gap: 13px;
+  padding: 18px 10px 17px;
+}
+
+.checkin-card > * {
+  width: min(198px, 100%);
+  margin-right: auto;
+  margin-left: auto;
 }
 
 .calendar-nav,
@@ -1029,7 +1038,7 @@ a {
 }
 
 .checkin-overview div {
-  padding: 10px;
+  padding: 11px 10px;
   border: 1px solid var(--line-soft);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.42);
@@ -1065,6 +1074,7 @@ a {
 }
 
 .checkin-admin-line span {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1080,14 +1090,14 @@ a {
   cursor: pointer;
 }
 
-.todo-unlock-panel {
+.todo-card {
   position: relative;
   overflow: hidden;
   display: grid;
-  gap: 10px;
-  padding: 12px;
+  gap: 12px;
+  padding: 17px 16px 16px;
   border: 1px solid rgba(255, 255, 255, 0.68);
-  border-radius: 16px;
+  border-radius: 8px;
   background:
     radial-gradient(circle at 88% 0%, rgba(255, 189, 128, 0.24), transparent 30%),
     linear-gradient(145deg, rgba(255, 255, 255, 0.68), rgba(255, 255, 255, 0.34));
@@ -1096,7 +1106,7 @@ a {
     inset 0 1px 0 rgba(255, 255, 255, 0.8);
 }
 
-.todo-unlock-panel::before {
+.todo-card::before {
   position: absolute;
   inset: -70px auto auto -40px;
   width: 130px;
@@ -1108,17 +1118,22 @@ a {
   pointer-events: none;
 }
 
-.todo-unlock-panel.done {
+.todo-card.done {
   background:
     radial-gradient(circle at 88% 0%, rgba(93, 214, 174, 0.2), transparent 30%),
     linear-gradient(145deg, rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0.38));
 }
 
-.todo-unlock-panel.loading {
+.todo-card.loading {
   opacity: 0.76;
 }
 
-.todo-unlock-head {
+.todo-card > * {
+  position: relative;
+  z-index: 1;
+}
+
+.todo-card-head {
   position: relative;
   z-index: 1;
   display: flex;
@@ -1127,14 +1142,23 @@ a {
   align-items: center;
 }
 
-.todo-unlock-head .eyebrow {
+.todo-card-head .eyebrow {
   margin: 0 0 3px;
   font-size: 10px;
 }
 
-.todo-unlock-head strong {
+.todo-card-head h2 {
+  margin: 0;
   color: var(--ink);
-  font-size: 14px;
+  font-size: 17px;
+  line-height: 1.2;
+}
+
+.todo-card-head strong {
+  display: block;
+  margin-top: 5px;
+  color: var(--ink);
+  font-size: 13px;
 }
 
 .todo-ring {
@@ -1153,7 +1177,7 @@ a {
   transition: background 240ms ease, transform 180ms ease;
 }
 
-.todo-unlock-panel.done .todo-ring {
+.todo-card.done .todo-ring {
   background:
     conic-gradient(var(--green) var(--todo-progress), rgba(218, 228, 240, 0.78) 0),
     rgba(255, 255, 255, 0.6);
@@ -1178,7 +1202,7 @@ a {
   font-weight: 900;
 }
 
-.todo-unlock-panel.done .todo-ring em {
+.todo-card.done .todo-ring em {
   color: #168a69;
 }
 
@@ -1290,6 +1314,7 @@ a {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.76);
   font-size: 12px;
   font-weight: 900;
+  white-space: nowrap;
   transition:
     color 160ms ease,
     background 160ms ease,
@@ -1321,7 +1346,14 @@ a {
 }
 
 .calendar-weekdays span {
+  display: grid;
+  place-items: center;
+  height: 18px;
   text-align: center;
+}
+
+.checkin-calendar {
+  gap: 5px;
 }
 
 .checkin-day {
@@ -1338,6 +1370,9 @@ a {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
   font-size: 11px;
   line-height: 1;
+  width: 24px;
+  max-width: 100%;
+  margin: 0 auto;
   transition:
     color 160ms ease,
     background 160ms ease,

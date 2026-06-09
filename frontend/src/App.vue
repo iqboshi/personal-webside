@@ -1271,6 +1271,40 @@ onUnmounted(() => {
           </div>
         </section>
 
+        <section class="mini-card todo-card" :class="{ done: todoStatus.allDone, loading: todoLoading }">
+          <div class="todo-card-head">
+            <div>
+              <p class="eyebrow">Daily Todo</p>
+              <h2>每日 Todo</h2>
+              <strong>{{ todoUnlockText }}</strong>
+            </div>
+            <span class="todo-ring" :style="todoRingStyle">
+              <em>{{ todoProgress }}</em>
+            </span>
+          </div>
+          <div class="todo-track" aria-hidden="true">
+            <span :style="{ width: `${todoProgress}%` }"></span>
+          </div>
+          <div v-if="todoStatus.tasks.length" class="todo-list">
+            <button
+              v-for="task in todoStatus.tasks"
+              :key="task.id"
+              class="todo-item"
+              :class="{ done: task.done }"
+              type="button"
+              :disabled="todoSaving || !adminSession.authenticated"
+              @click="toggleTodo(task.id, !task.done)"
+            >
+              <span class="todo-check"><el-icon v-if="task.done"><Check /></el-icon></span>
+              <span>{{ task.title }}</span>
+            </button>
+          </div>
+          <p v-else class="todo-empty">当前没有每日 Todo。管理员可以设置长期任务。</p>
+          <button class="todo-edit-button" type="button" @click="openTodoEditor">
+            {{ adminSession.authenticated ? '设置每日 Todo' : '登录后设置 Todo' }}
+          </button>
+        </section>
+
         <section id="garden" class="mini-card checkin-card">
           <div class="card-section-heading compact-heading">
             <div>
@@ -1307,39 +1341,6 @@ onUnmounted(() => {
             <span>{{ adminSession.authenticated ? `已登录 ${adminSession.username || 'admin'}` : '只读模式' }}</span>
             <button v-if="adminSession.authenticated" type="button" @click="handleAdminLogout">退出</button>
             <button v-else type="button" @click="openAdminLogin">管理员登录</button>
-          </div>
-
-          <div class="todo-unlock-panel" :class="{ done: todoStatus.allDone, loading: todoLoading }">
-            <div class="todo-unlock-head">
-              <div>
-                <p class="eyebrow">Daily Todo</p>
-                <strong>{{ todoUnlockText }}</strong>
-              </div>
-              <span class="todo-ring" :style="todoRingStyle">
-                <em>{{ todoProgress }}</em>
-              </span>
-            </div>
-            <div class="todo-track" aria-hidden="true">
-              <span :style="{ width: `${todoProgress}%` }"></span>
-            </div>
-            <div v-if="todoStatus.tasks.length" class="todo-list">
-              <button
-                v-for="task in todoStatus.tasks"
-                :key="task.id"
-                class="todo-item"
-                :class="{ done: task.done }"
-                type="button"
-                :disabled="todoSaving || !adminSession.authenticated"
-                @click="toggleTodo(task.id, !task.done)"
-              >
-                <span class="todo-check"><el-icon v-if="task.done"><Check /></el-icon></span>
-                <span>{{ task.title }}</span>
-              </button>
-            </div>
-            <p v-else class="todo-empty">当前没有每日 Todo。管理员可以设置长期任务。</p>
-            <button class="todo-edit-button" type="button" @click="openTodoEditor">
-              {{ adminSession.authenticated ? '设置每日 Todo' : '登录后设置 Todo' }}
-            </button>
           </div>
 
           <div class="calendar-weekdays" aria-hidden="true">
