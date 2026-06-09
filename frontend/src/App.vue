@@ -16,10 +16,19 @@ import {
 import hljs from 'highlight.js/lib/common'
 
 import { fetchArticle, fetchArticles } from './api/articles'
-import { fetchAdminSession, fetchCheckins, loginAdmin, logoutAdmin, saveCheckin as saveCheckinEntry } from './api/checkins'
+import {
+  fetchAdminSession,
+  fetchCheckins,
+  fetchTodayTodos,
+  loginAdmin,
+  logoutAdmin,
+  saveCheckin as saveCheckinEntry,
+  saveTodoTasks,
+  setTodoCompletion,
+} from './api/checkins'
 import { fetchProfile } from './api/profile'
 import { fallbackProfile } from './data/fallback'
-import type { AdminSession, Article, ArticleBlock, Checkin, Project, SiteData } from './types'
+import type { AdminSession, Article, ArticleBlock, Checkin, Project, SiteData, TodoDayStatus, TodoTaskDraft } from './types'
 import { staticAssetPath, stripBasePath, withBasePath } from './url'
 
 interface ClickBubble {
@@ -89,6 +98,11 @@ const checkinSaving = ref(false)
 const checkinApiReady = ref(true)
 const selectedCheckinDate = ref(todayKey)
 const checkinNoteDraft = ref('')
+const todoStatus = ref<TodoDayStatus>(emptyTodoStatus(todayKey))
+const todoLoading = ref(false)
+const todoSaving = ref(false)
+const todoEditorOpen = ref(false)
+const todoDrafts = ref<TodoTaskDraft[]>([])
 const isCheckinDialogOpen = ref(false)
 const isAdminLoginOpen = ref(false)
 const adminLoginLoading = ref(false)
@@ -211,8 +225,19 @@ const selectedCheckinChecked = computed(() => checkedDaySet.value.has(selectedCh
 const selectedCheckinHasNote = computed(() => Boolean(checkinNotes.value[selectedCheckinDate.value]))
 const selectedCheckinIsToday = computed(() => selectedCheckinDate.value === todayKey)
 const canEditSelectedDate = computed(() => selectedCheckinDate.value <= todayKey)
+const selectedTodoApplies = computed(() => selectedCheckinDate.value === todoStatus.value.date)
+const selectedTodosUnlocked = computed(() => {
+  if (selectedCheckinChecked.value) return true
+  if (!selectedTodoApplies.value) return true
+  return todoStatus.value.allDone
+})
 const canWriteSelectedCheckin = computed(
-  () => checkinApiReady.value && adminSession.value.authenticated && canEditSelectedDate.value && !checkinSaving.value,
+  () =>
+    checkinApiReady.value &&
+    adminSession.value.authenticated &&
+    canEditSelectedDate.value &&
+    selectedTodosUnlocked.value &&
+    !checkinSaving.value,
 )
 const canClearCheckinDraft = computed(() => canWriteSelectedCheckin.value && Boolean(checkinNoteDraft.value.trim() || selectedCheckinHasNote.value))
 const selectedCheckinTitle = computed(() => formatCheckinDate(selectedCheckinDate.value))
@@ -226,6 +251,7 @@ const selectedCheckinHint = computed(() => {
   if (!checkinApiReady.value) return '后端接口未连接'
   if (!canEditSelectedDate.value) return '未来日期暂不能记录'
   if (!adminSession.value.authenticated) return selectedCheckinHasNote.value ? '访客只能查看笔记' : '管理员登录后可签到'
+  if (!selectedTodosUnlocked.value) return '完成今日 Todo 后解锁签到'
   return selectedCheckinHasNote.value ? '可以继续补充当天记录' : '写下当天的练习、阅读或项目进展'
 })
 const checkinStatusText = computed(() => {
@@ -234,6 +260,19 @@ const checkinStatusText = computed(() => {
   if (adminSession.value.authenticated) return '管理员'
   return isTodayChecked.value ? '已签到' : '今日未签'
 })
+const todoProgress = computed(() => {
+  if (todoStatus.value.total === 0) return 100
+  return Math.round((todoStatus.value.completed / todoStatus.value.total) * 100)
+})
+const todoUnlockText = computed(() => {
+  if (todoLoading.value) return '同步 Todo'
+  if (isTodayChecked.value) return '今日已签到'
+  if (todoStatus.value.total === 0) return '无任务，直接签到'
+  return todoStatus.value.allDone ? '已解锁签到' : `还差 ${todoStatus.value.total - todoStatus.value.completed} 项`
+})
+const todoRingStyle = computed(() => ({
+  '--todo-progress': `${todoProgress.value}%`,
+}))
 const isNextMonthDisabled = computed(() => {
   const year = calendarMonth.value.getFullYear()
   const month = calendarMonth.value.getMonth()
@@ -296,6 +335,16 @@ const streakDays = computed(() => {
   }
   return streak
 })
+
+function emptyTodoStatus(date: string): TodoDayStatus {
+  return {
+    date,
+    tasks: [],
+    total: 0,
+    completed: 0,
+    allDone: true,
+  }
+}
 
 function articleBlocks(article: Article): ArticleBlock[] {
   if (Array.isArray(article.blocks) && article.blocks.length > 0) {
@@ -441,6 +490,29 @@ async function loadCheckinsFromAPI(showMessage = false) {
   }
 }
 
+function applyTodoStatus(status: TodoDayStatus) {
+  todoStatus.value = {
+    ...status,
+    tasks: [...status.tasks].sort((left, right) => left.sortOrder - right.sortOrder),
+  }
+  todoDrafts.value = todoStatus.value.tasks.map((task) => ({ id: task.id, title: task.title }))
+}
+
+async function loadTodosFromAPI(showMessage = false) {
+  todoLoading.value = true
+  try {
+    applyTodoStatus(await fetchTodayTodos(todayKey))
+    checkinApiReady.value = true
+    if (showMessage) ElMessage.success('Todo 已同步')
+  } catch (error) {
+    console.warn(error)
+    todoStatus.value = emptyTodoStatus(todayKey)
+    if (showMessage) ElMessage.warning('Todo 接口暂不可用')
+  } finally {
+    todoLoading.value = false
+  }
+}
+
 async function loadAdminSession() {
   if (!checkinApiReady.value) return
 
@@ -489,6 +561,10 @@ async function saveSelectedCheckin() {
     ElMessage.warning('请先登录管理员账号')
     return
   }
+  if (!selectedTodosUnlocked.value) {
+    ElMessage.warning('完成今日 Todo 后再签到')
+    return
+  }
 
   checkinSaving.value = true
   try {
@@ -500,6 +576,81 @@ async function saveSelectedCheckin() {
     ElMessage.error('保存失败，请检查登录状态或后端接口')
   } finally {
     checkinSaving.value = false
+  }
+}
+
+async function toggleTodo(taskId: string, done: boolean) {
+  if (!checkinApiReady.value) {
+    ElMessage.warning('后端接口未连接')
+    return
+  }
+  if (!adminSession.value.authenticated) {
+    isAdminLoginOpen.value = true
+    selectedCheckinDate.value = todayKey
+    isCheckinDialogOpen.value = true
+    ElMessage.warning('请先登录管理员账号')
+    return
+  }
+
+  todoSaving.value = true
+  try {
+    applyTodoStatus(await setTodoCompletion(todayKey, taskId, done))
+    ElMessage.success(done ? '完成一项 Todo' : '已取消完成')
+  } catch (error) {
+    console.warn(error)
+    ElMessage.error('Todo 保存失败')
+  } finally {
+    todoSaving.value = false
+  }
+}
+
+function openTodoEditor() {
+  if (!adminSession.value.authenticated) {
+    isAdminLoginOpen.value = true
+    selectedCheckinDate.value = todayKey
+    isCheckinDialogOpen.value = true
+    ElMessage.warning('请先登录管理员账号')
+    return
+  }
+  todoDrafts.value = todoStatus.value.tasks.map((task) => ({ id: task.id, title: task.title }))
+  if (todoDrafts.value.length === 0) {
+    todoDrafts.value = [{ title: 'LeetCode 复盘' }, { title: '项目推进' }, { title: '阅读记录' }]
+  }
+  todoEditorOpen.value = true
+}
+
+function addTodoDraft() {
+  if (todoDrafts.value.length >= 18) {
+    ElMessage.warning('最多保留 18 个 Todo')
+    return
+  }
+  todoDrafts.value = [...todoDrafts.value, { title: '' }]
+}
+
+function removeTodoDraft(index: number) {
+  todoDrafts.value = todoDrafts.value.filter((_, draftIndex) => draftIndex !== index)
+}
+
+async function submitTodoTasks() {
+  if (!adminSession.value.authenticated) {
+    isAdminLoginOpen.value = true
+    return
+  }
+
+  const tasks = todoDrafts.value
+    .map((task) => ({ id: task.id, title: task.title.trim() }))
+    .filter((task) => task.title)
+
+  todoSaving.value = true
+  try {
+    applyTodoStatus(await saveTodoTasks(tasks, todayKey))
+    todoEditorOpen.value = false
+    ElMessage.success('每日 Todo 已更新')
+  } catch (error) {
+    console.warn(error)
+    ElMessage.error('Todo 更新失败')
+  } finally {
+    todoSaving.value = false
   }
 }
 
@@ -528,6 +679,7 @@ async function submitAdminLogin() {
     adminSession.value = await loginAdmin(adminUsername.value.trim(), adminPassword.value)
     adminPassword.value = ''
     isAdminLoginOpen.value = false
+    await loadTodosFromAPI()
     ElMessage.success('管理员已登录')
   } catch (error) {
     console.warn(error)
@@ -734,6 +886,7 @@ function spawnClickBubble(event: PointerEvent) {
 onMounted(() => {
   loadInitialData()
   loadCheckinsFromAPI()
+  loadTodosFromAPI()
   loadAdminSession()
   lastScrollY = window.scrollY
   updateNavOnScroll()
@@ -1156,6 +1309,39 @@ onUnmounted(() => {
             <button v-else type="button" @click="openAdminLogin">管理员登录</button>
           </div>
 
+          <div class="todo-unlock-panel" :class="{ done: todoStatus.allDone, loading: todoLoading }">
+            <div class="todo-unlock-head">
+              <div>
+                <p class="eyebrow">Daily Todo</p>
+                <strong>{{ todoUnlockText }}</strong>
+              </div>
+              <span class="todo-ring" :style="todoRingStyle">
+                <em>{{ todoProgress }}</em>
+              </span>
+            </div>
+            <div class="todo-track" aria-hidden="true">
+              <span :style="{ width: `${todoProgress}%` }"></span>
+            </div>
+            <div v-if="todoStatus.tasks.length" class="todo-list">
+              <button
+                v-for="task in todoStatus.tasks"
+                :key="task.id"
+                class="todo-item"
+                :class="{ done: task.done }"
+                type="button"
+                :disabled="todoSaving || !adminSession.authenticated"
+                @click="toggleTodo(task.id, !task.done)"
+              >
+                <span class="todo-check"><el-icon v-if="task.done"><Check /></el-icon></span>
+                <span>{{ task.title }}</span>
+              </button>
+            </div>
+            <p v-else class="todo-empty">当前没有每日 Todo。管理员可以设置长期任务。</p>
+            <button class="todo-edit-button" type="button" @click="openTodoEditor">
+              {{ adminSession.authenticated ? '设置每日 Todo' : '登录后设置 Todo' }}
+            </button>
+          </div>
+
           <div class="calendar-weekdays" aria-hidden="true">
             <span v-for="weekday in weekdayLabels" :key="weekday">{{ weekday }}</span>
           </div>
@@ -1216,7 +1402,7 @@ onUnmounted(() => {
             :readonly="!canWriteSelectedCheckin"
             maxlength="240"
             rows="5"
-            placeholder="写一点当天的练习、错题、阅读或项目进展。"
+            :placeholder="selectedTodosUnlocked ? '写一点当天的练习、错题、阅读或项目进展。' : '完成今日 Todo 后才能签到和写入当天笔记。'"
           ></textarea>
           <div class="note-editor-actions">
             <small>{{ checkinNoteDraft.length }} / 240</small>
@@ -1236,7 +1422,39 @@ onUnmounted(() => {
               </button>
               <button v-else class="checkin-action" type="button" :disabled="!canWriteSelectedCheckin" @click="saveSelectedCheckin">
                 <el-icon><Calendar /></el-icon>
-                <span>{{ checkinSaving ? '保存中' : checkinSaveLabel }}</span>
+                <span>{{ checkinSaving ? '保存中' : selectedTodosUnlocked ? checkinSaveLabel : 'Todo 未完成' }}</span>
+              </button>
+            </div>
+          </div>
+        </section>
+      </div>
+    </transition>
+
+    <transition name="checkin-dialog">
+      <div v-if="todoEditorOpen" class="checkin-dialog-backdrop" @click.self="todoEditorOpen = false">
+        <section class="checkin-dialog todo-editor" role="dialog" aria-modal="true" aria-label="设置每日 Todo">
+          <button class="checkin-dialog-close" type="button" aria-label="关闭 Todo 设置" @click="todoEditorOpen = false">×</button>
+          <div class="note-editor-head">
+            <div>
+              <span>Daily Todo</span>
+              <strong>设置长期每日任务</strong>
+            </div>
+            <small>保存后会作为每天的解锁清单</small>
+          </div>
+          <div class="todo-draft-list">
+            <label v-for="(draft, index) in todoDrafts" :key="draft.id || index" class="todo-draft-row">
+              <span>{{ index + 1 }}</span>
+              <input v-model="draft.title" maxlength="48" placeholder="例如：LeetCode 错题复盘" />
+              <button type="button" aria-label="删除任务" @click="removeTodoDraft(index)">×</button>
+            </label>
+          </div>
+          <div class="note-editor-actions">
+            <small>{{ todoDrafts.filter((task) => task.title.trim()).length }} / 18</small>
+            <div>
+              <button type="button" @click="addTodoDraft">添加一项</button>
+              <button class="checkin-action" type="button" :disabled="todoSaving" @click="submitTodoTasks">
+                <el-icon><Check /></el-icon>
+                <span>{{ todoSaving ? '保存中' : '保存任务' }}</span>
               </button>
             </div>
           </div>

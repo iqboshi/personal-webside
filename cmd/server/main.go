@@ -21,6 +21,7 @@ import (
 	"personal_webside/internal/articles"
 	"personal_webside/internal/checkins"
 	"personal_webside/internal/profile"
+	"personal_webside/internal/todos"
 )
 
 const adminCookieName = "mengqing_admin_session"
@@ -52,6 +53,12 @@ func main() {
 	}
 	defer checkinStore.Close()
 
+	todoStore, err := todos.OpenFromEnv(*dbPath)
+	if err != nil {
+		log.Fatalf("open todo database: %v", err)
+	}
+	defer todoStore.Close()
+
 	auth := newAdminAuth()
 	cors := newCORSConfig()
 
@@ -61,10 +68,13 @@ func main() {
 	mux.HandleFunc("/api/articles", cors.wrap(handleArticles(articleStore)))
 	mux.HandleFunc("/api/articles/", cors.wrap(handleArticle(articleStore)))
 	mux.HandleFunc("/api/checkins", cors.wrap(handleCheckins(checkinStore)))
+	mux.HandleFunc("/api/todos/today", cors.wrap(handleTodayTodos(todoStore)))
 	mux.HandleFunc("/api/admin/session", cors.wrap(auth.handleSession))
 	mux.HandleFunc("/api/admin/login", cors.wrap(auth.handleLogin))
 	mux.HandleFunc("/api/admin/logout", cors.wrap(auth.handleLogout))
-	mux.HandleFunc("/api/admin/checkins/", cors.wrap(auth.requireAdmin(handleAdminCheckin(checkinStore))))
+	mux.HandleFunc("/api/admin/checkins/", cors.wrap(auth.requireAdmin(handleAdminCheckin(checkinStore, todoStore))))
+	mux.HandleFunc("/api/admin/todos/tasks", cors.wrap(auth.requireAdmin(handleAdminTodoTasks(todoStore))))
+	mux.HandleFunc("/api/admin/todos/complete", cors.wrap(auth.requireAdmin(handleAdminTodoCompletion(todoStore))))
 	mux.HandleFunc("/api/stream", cors.wrap(handleStream))
 
 	if dirExists(*staticDir) {
@@ -106,7 +116,27 @@ func handleCheckins(store *checkins.Store) http.HandlerFunc {
 	}
 }
 
-func handleAdminCheckin(store *checkins.Store) http.HandlerFunc {
+func handleTodayTodos(store *todos.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		dateKey := strings.TrimSpace(r.URL.Query().Get("date"))
+		if dateKey == "" {
+			dateKey = store.TodayKey()
+		}
+		status, err := store.DayStatus(r.Context(), dateKey)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, http.StatusOK, status)
+	}
+}
+
+func handleAdminCheckin(checkinStore *checkins.Store, todoStore *todos.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPut {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -127,12 +157,90 @@ func handleAdminCheckin(store *checkins.Store) http.HandlerFunc {
 			return
 		}
 
-		item, err := store.Upsert(r.Context(), dateKey, input.Note)
+		_, found, err := checkinStore.Get(r.Context(), dateKey)
+		if err != nil {
+			log.Printf("get check-in before save: %v", err)
+			http.Error(w, "failed to load check-in", http.StatusInternalServerError)
+			return
+		}
+		if !found && dateKey == todoStore.TodayKey() {
+			unlocked, todoStatus, err := todoStore.CanUnlockCheckin(r.Context(), dateKey)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			if !unlocked {
+				writeJSON(w, http.StatusConflict, map[string]any{
+					"error": "todo_not_completed",
+					"todos": todoStatus,
+				})
+				return
+			}
+		}
+
+		item, err := checkinStore.Upsert(r.Context(), dateKey, input.Note)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		writeJSON(w, http.StatusOK, item)
+	}
+}
+
+func handleAdminTodoTasks(store *todos.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		var input struct {
+			Date  string            `json:"date"`
+			Tasks []todos.TaskDraft `json:"tasks"`
+		}
+		if err := readJSONBody(r, &input, 8192); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if input.Date == "" {
+			input.Date = store.TodayKey()
+		}
+
+		status, err := store.ReplaceTasks(r.Context(), input.Tasks, input.Date)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, http.StatusOK, status)
+	}
+}
+
+func handleAdminTodoCompletion(store *todos.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		var input struct {
+			Date   string `json:"date"`
+			TaskID string `json:"taskId"`
+			Done   bool   `json:"done"`
+		}
+		if err := readJSONBody(r, &input, 4096); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if input.Date == "" {
+			input.Date = store.TodayKey()
+		}
+
+		status, err := store.SetCompletion(r.Context(), input.Date, input.TaskID, input.Done)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, http.StatusOK, status)
 	}
 }
 

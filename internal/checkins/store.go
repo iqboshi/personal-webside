@@ -123,7 +123,7 @@ func (s *Store) List(ctx context.Context) ([]Checkin, error) {
 	}
 	defer rows.Close()
 
-	var result []Checkin
+	result := make([]Checkin, 0)
 	for rows.Next() {
 		var item Checkin
 		if err := rows.Scan(&item.Date, &item.Note, &item.CheckedAt, &item.UpdatedAt); err != nil {

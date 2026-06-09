@@ -1,4 +1,4 @@
-import type { AdminSession, Checkin } from '../types'
+import type { AdminSession, Checkin, TodoDayStatus, TodoTaskDraft } from '../types'
 import { requestJSON } from './request'
 
 const ADMIN_TOKEN_KEY = 'mengqing-homepage-admin-token'
@@ -10,6 +10,11 @@ interface CheckinListResponse {
 export async function fetchCheckins(): Promise<Checkin[]> {
   const response = await requestJSON<CheckinListResponse>('/api/checkins')
   return response.items
+}
+
+export function fetchTodayTodos(date?: string): Promise<TodoDayStatus> {
+  const query = date ? `?date=${encodeURIComponent(date)}` : ''
+  return requestJSON<TodoDayStatus>(`/api/todos/today${query}`)
 }
 
 export function fetchAdminSession(): Promise<AdminSession> {
@@ -44,6 +49,22 @@ export async function saveCheckin(date: string, note: string): Promise<Checkin> 
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify({ note }),
+  })
+}
+
+export function saveTodoTasks(tasks: TodoTaskDraft[], date?: string): Promise<TodoDayStatus> {
+  return requestJSON<TodoDayStatus>('/api/admin/todos/tasks', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ date, tasks }),
+  })
+}
+
+export function setTodoCompletion(date: string, taskId: string, done: boolean): Promise<TodoDayStatus> {
+  return requestJSON<TodoDayStatus>('/api/admin/todos/complete', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ date, taskId, done }),
   })
 }
 

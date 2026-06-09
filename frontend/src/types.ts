@@ -182,6 +182,27 @@ export interface Checkin {
   updatedAt: string
 }
 
+export interface TodoTask {
+  id: string
+  title: string
+  done: boolean
+  completedAt?: string
+  sortOrder: number
+}
+
+export interface TodoDayStatus {
+  date: string
+  tasks: TodoTask[]
+  total: number
+  completed: number
+  allDone: boolean
+}
+
+export interface TodoTaskDraft {
+  id?: string
+  title: string
+}
+
 export interface AdminSession {
   authenticated: boolean
   username?: string
