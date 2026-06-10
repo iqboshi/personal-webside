@@ -943,6 +943,49 @@ a {
   background: rgba(239, 251, 246, 0.62);
 }
 
+.admin-tools-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border-color: rgba(255, 255, 255, 0.82);
+  background:
+    radial-gradient(circle at 18% 0%, rgba(67, 133, 255, 0.13), transparent 38%),
+    linear-gradient(145deg, rgba(255, 255, 255, 0.76), rgba(255, 255, 255, 0.42)),
+    rgba(255, 255, 255, 0.58);
+}
+
+.admin-tools-card::before {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--green);
+  box-shadow: 0 0 0 6px rgba(24, 167, 124, 0.1);
+  content: "";
+}
+
+.admin-tools-copy {
+  display: grid;
+  gap: 5px;
+  padding-right: 22px;
+}
+
+.admin-tools-copy span {
+  color: var(--blue);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.admin-tools-copy strong {
+  color: var(--ink);
+  font-size: 17px;
+  line-height: 1.15;
+}
+
 .empty-state {
   padding: 28px 20px;
   border: 1px dashed rgba(79, 124, 255, 0.28);
@@ -1092,9 +1135,12 @@ a {
 
 .content-manage-button {
   display: inline-flex;
-  justify-content: center;
+  justify-content: space-between;
+  gap: 10px;
   align-items: center;
+  width: 100%;
   min-height: 30px;
+  padding: 8px 10px 8px 12px;
   border: 1px solid rgba(67, 133, 255, 0.18);
   border-radius: 999px;
   color: var(--blue);
@@ -1107,6 +1153,7 @@ a {
   font-size: 12px;
   font-weight: 900;
   white-space: nowrap;
+  cursor: pointer;
   transition:
     border-color 160ms ease,
     background 160ms ease,
@@ -1123,6 +1170,22 @@ a {
     0 12px 24px rgba(67, 133, 255, 0.12),
     inset 0 1px 0 rgba(255, 255, 255, 0.86);
   transform: translateY(-1px);
+}
+
+.content-manage-button .el-icon {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  color: #fff;
+  background: linear-gradient(135deg, #6aa0ff, #3f7cff);
+  box-shadow: 0 8px 16px rgba(67, 133, 255, 0.18);
+  transition: transform 160ms ease;
+}
+
+.content-manage-button:hover .el-icon {
+  transform: translateX(2px);
 }
 
 .todo-card {

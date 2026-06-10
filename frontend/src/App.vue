@@ -1287,6 +1287,17 @@ onUnmounted(() => {
       </section>
 
       <aside class="right-rail">
+        <section v-if="adminSession.authenticated" class="mini-card admin-tools-card" aria-label="管理员工具">
+          <div class="admin-tools-copy">
+            <span>Admin</span>
+            <strong>站点管理</strong>
+          </div>
+          <button class="content-manage-button" type="button" @click="openContentEditor">
+            <span>{{ uiText.contentManage }}</span>
+            <el-icon><ArrowRight /></el-icon>
+          </button>
+        </section>
+
         <section class="mini-card">
           <div class="card-section-heading compact-heading">
             <div>
@@ -1391,10 +1402,6 @@ onUnmounted(() => {
             <button v-if="adminSession.authenticated" type="button" @click="handleAdminLogout">{{ uiText.adminLogout }}</button>
             <button v-else type="button" @click="openAdminLogin">{{ uiText.adminLogin }}</button>
           </div>
-
-          <button v-if="adminSession.authenticated" class="content-manage-button" type="button" @click="openContentEditor">
-            {{ uiText.contentManage }}
-          </button>
 
           <div class="calendar-weekdays" aria-hidden="true">
             <span v-for="weekday in weekdayLabels" :key="weekday">{{ weekday }}</span>
