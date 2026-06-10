@@ -1,0 +1,596 @@
+{
+  "person": {
+    "name": "张孟庆",
+    "english": "Mengqing Zhang",
+    "title": "2027届硕士 | 后端开发 / 数据处理 / AI应用开发",
+    "school": "中国农业大学 信息与电气工程学院",
+    "major": "计算机科学与技术",
+    "location": "北京 海淀区",
+    "intentions": [
+      "软件开发",
+      "后端开发",
+      "数据处理",
+      "AI应用开发",
+      "企业信息化建设"
+    ],
+    "summary": "中国农业大学计算机科学与技术学术型硕士，具备央企算法实习和国家科研项目经历。熟悉 Python、Go、Java、SQL，具备 Spring Boot、FastAPI、React/TypeScript 平台开发实践，能够完成数据处理、模块开发、接口对接和结果可视化。"
+  },
+  "hero": {
+    "eyebrow": "Computer Science Graduate Student",
+    "headline": "深度学习视觉方向，主要使用遥感数据。",
+    "subheadline": "",
+    "focus": [
+      "Go API Service",
+      "Vue + Element Plus",
+      "PyTorch CV"
+    ]
+  },
+  "contacts": [
+    {
+      "type": "qq",
+      "label": "QQ",
+      "value": "2358164625",
+      "href": "",
+      "note": "点击复制号码"
+    },
+    {
+      "type": "wechat",
+      "label": "微信",
+      "value": "a2358164625",
+      "href": "",
+      "note": "点击复制微信号"
+    },
+    {
+      "type": "phone",
+      "label": "电话",
+      "value": "18513309077",
+      "href": "tel:18513309077"
+    },
+    {
+      "type": "mail",
+      "label": "邮箱",
+      "value": "zhangmengqing@cau.edu.cn",
+      "href": "mailto:zhangmengqing@cau.edu.cn",
+      "note": "点击复制邮箱"
+    },
+    {
+      "type": "pin",
+      "label": "城市",
+      "value": "北京 海淀区",
+      "href": ""
+    },
+    {
+      "type": "link",
+      "label": "遥感数据平台",
+      "value": "iqboshi.github.io/platform",
+      "href": "https://iqboshi.github.io/platform/"
+    }
+  ],
+  "navigation": [
+    {
+      "label": "能力",
+      "to": "#skills"
+    },
+    {
+      "label": "项目",
+      "to": "#projects"
+    },
+    {
+      "label": "科研",
+      "to": "#research"
+    },
+    {
+      "label": "编码",
+      "to": "#coding"
+    },
+    {
+      "label": "阅读",
+      "to": "#reading"
+    }
+  ],
+  "metrics": [
+    {
+      "label": "在线作品",
+      "value": "1",
+      "suffix": "",
+      "note": "可在线打开的项目"
+    },
+    {
+      "label": "项目帖",
+      "value": "4",
+      "suffix": "",
+      "note": "项目复盘文章"
+    },
+    {
+      "label": "论文",
+      "value": "3",
+      "suffix": "",
+      "note": "论文与研究记录"
+    },
+    {
+      "label": "爱好",
+      "value": "编程",
+      "suffix": "",
+      "note": "长期兴趣"
+    }
+  ],
+  "skills": [
+    {
+      "name": "编程与基础",
+      "level": 90,
+      "description": "熟悉 Python、Go、Java、SQL，具备脚本开发、数据处理、算法模块封装和工程调试经验。",
+      "keywords": [
+        "Python",
+        "Go",
+        "Java",
+        "SQL",
+        "Data Structures"
+      ]
+    },
+    {
+      "name": "后端与平台",
+      "level": 84,
+      "description": "了解 Spring Boot REST 接口开发流程，熟悉 FastAPI 接口开发和 MySQL/Redis 常见使用方式。",
+      "keywords": [
+        "Spring Boot",
+        "FastAPI",
+        "MySQL",
+        "Redis",
+        "REST API"
+      ]
+    },
+    {
+      "name": "AI/CV能力",
+      "level": 88,
+      "description": "熟悉 PyTorch 模型训练流程，掌握目标检测、语义分割、实例分割等视觉任务。",
+      "keywords": [
+        "PyTorch",
+        "目标检测",
+        "语义分割",
+        "实例分割",
+        "遥感影像"
+      ]
+    },
+    {
+      "name": "工程协作",
+      "level": 82,
+      "description": "熟悉 Git/GitHub 版本管理、Linux 远程开发、AutoDL 训练环境和实验管理。",
+      "keywords": [
+        "Git",
+        "GitHub",
+        "Linux",
+        "AutoDL",
+        "Issue Tracking"
+      ]
+    },
+    {
+      "name": "大模型应用",
+      "level": 76,
+      "description": "了解 LLM 应用开发、RAG 基本原理和 Agent 调试流程，具备推理过程可视化实践。",
+      "keywords": [
+        "LLM",
+        "RAG",
+        "Agent",
+        "可解释性",
+        "推理可视化"
+      ]
+    }
+  ],
+  "experiences": [
+    {
+      "company": "中国船舶集团有限公司",
+      "role": "算法工程师实习",
+      "period": "2024.08 - 2025.02",
+      "place": "北京",
+      "stack": [
+        "Python",
+        "强化学习",
+        "LLM",
+        "可视化",
+        "模型可解释性分析"
+      ],
+      "points": [
+        "围绕强化学习与 LLM 模型调试场景，负责算法结果可视化模块开发，完成状态解析、路径渲染和回放逻辑。",
+        "将智能体决策路径、推理中间步骤和注意力信息进行结构化展示，帮助定位模型异常并解释决策过程。",
+        "参与模块联调、实验记录和演示材料整理，配合算法团队完成结果分析和跨模块展示。"
+      ]
+    }
+  ],
+  "projects": [
+    {
+      "name": "遥感数据处理与流程管理平台",
+      "role": "全栈开发",
+      "period": "在线作品",
+      "link": "https://iqboshi.github.io/platform/",
+      "stack": [
+        "React",
+        "TypeScript",
+        "Ant Design",
+        "FastAPI",
+        "Python"
+      ],
+      "highlights": [
+        "搭建遥感数据管理系统，包含数据集版本、地图预览、处理流程编辑和结果管理。",
+        "使用 React、TypeScript、Ant Design 开发前端页面，FastAPI 提供接口、权限、上传和流程校验。"
+      ],
+      "impact": "在线预览可直接查看交互，本地版可运行 FastAPI 和 SQLite，能看到真实接口和数据表设计。"
+    },
+    {
+      "name": "水稻病虫害分级与按需喷药系统",
+      "role": "算法开发",
+      "period": "2024.12 - 至今",
+      "link": "",
+      "stack": [
+        "Python",
+        "PyTorch",
+        "计算机视觉",
+        "遥感可视化",
+        "病虫害分级"
+      ],
+      "highlights": [
+        "面向复杂稻田场景，负责病虫害监测与分级算法实验，完成数据整理、模型训练和效果对比。",
+        "参与病虫害空间分布可视化平台开发，把模型识别结果整理成喷药作业可参考的信息。"
+      ],
+      "impact": "把视觉模型结果接到真实农业任务里，关注结果是否能被使用者看懂和采用。"
+    },
+    {
+      "name": "农田智慧施肥与冬小麦分蘖密度无人机遥感监测",
+      "role": "算法开发",
+      "period": "2022.06 - 至今",
+      "link": "",
+      "stack": [
+        "Python",
+        "无人机遥感",
+        "PROSAIL 反演",
+        "迁移学习",
+        "模型验证"
+      ],
+      "highlights": [
+        "参与无人机遥感影像和田间采样数据处理，围绕 PROSAIL 反演和迁移学习开展算法优化实验。",
+        "负责算法与无人机系统的数据流程对接和验证，检查算法能否用于真实农田任务。"
+      ],
+      "impact": "长期处理真实农田数据，关注算法结果能否落到具体任务里。"
+    }
+  ],
+  "research": [
+    {
+      "title": "农业工程学报论文",
+      "status": "论文 1 篇",
+      "tags": [
+        "农业影像",
+        "遥感应用",
+        "模型验证"
+      ],
+      "detail": "围绕农业影像与智能监测整理实验结果，并把方法、数据和结论写成论文材料。"
+    },
+    {
+      "title": "中科院一区方向一作论文",
+      "status": "2 篇在投",
+      "tags": [
+        "一作",
+        "计算机视觉",
+        "智慧农业"
+      ],
+      "detail": "围绕复杂农业场景中的视觉识别、区域分析和作业建议展开。"
+    }
+  ],
+  "coding": {
+    "headline": "算法训练与工程节奏",
+    "metrics": [
+      {
+        "label": "LeetCode 题量",
+        "value": "--",
+        "unit": "题",
+        "trend": "预留同步位置"
+      },
+      {
+        "label": "连续打卡",
+        "value": "--",
+        "unit": "天",
+        "trend": "可接入打卡记录"
+      },
+      {
+        "label": "工程提交节奏",
+        "value": "周更",
+        "unit": "",
+        "trend": "项目与论文并行迭代"
+      },
+      {
+        "label": "重点题型",
+        "value": "DP / 图 / 数组",
+        "unit": "",
+        "trend": "保持基础题手感"
+      }
+    ],
+    "tracks": [
+      {
+        "name": "数据结构基础",
+        "progress": 88,
+        "note": "数组、链表、哈希、栈队列"
+      },
+      {
+        "name": "动态规划",
+        "progress": 70,
+        "note": "状态设计与转移压缩"
+      },
+      {
+        "name": "图搜索",
+        "progress": 76,
+        "note": "BFS、DFS、最短路"
+      },
+      {
+        "name": "SQL 与后端题",
+        "progress": 82,
+        "note": "查询优化与接口设计"
+      }
+    ]
+  },
+  "reading": [
+    {
+      "topic": "无人机遥感与作物表型",
+      "cadence": "长期跟踪",
+      "keywords": [
+        "UAV",
+        "PROSAIL",
+        "迁移学习",
+        "模型验证"
+      ],
+      "summary": "关注无人机影像、田间采样数据和作物生长指标如何进入模型，以及结果怎么验证。"
+    },
+    {
+      "topic": "计算机视觉农业应用",
+      "cadence": "项目驱动",
+      "keywords": [
+        "检测",
+        "分割",
+        "病虫害分级",
+        "空间可视化"
+      ],
+      "summary": "关注复杂稻田场景里的目标识别、区域分割和作业建议表达，记录数据处理和模型评估方法。"
+    },
+    {
+      "topic": "LLM Agent 与可解释性",
+      "cadence": "实习延展",
+      "keywords": [
+        "RAG",
+        "Agent",
+        "Trajectory",
+        "Reasoning Trace"
+      ],
+      "summary": "关注推理过程结构化、路径回放、注意力信息展示和异常定位。"
+    }
+  ],
+  "blogIdeas": [
+    {
+      "title": "Go 后端如何承载个人主页数据 API",
+      "type": "Engineering Note",
+      "tags": [
+        "Go",
+        "net/http",
+        "SSE"
+      ],
+      "brief": "用轻量服务提供结构化站点数据、实时状态流和前端静态托管。"
+    },
+    {
+      "title": "遥感数据平台的模块拆解",
+      "type": "Project Review",
+      "tags": [
+        "React",
+        "FastAPI",
+        "Workflow"
+      ],
+      "brief": "记录数据集、地图页面、模型结果和流程校验几个部分的设计。"
+    },
+    {
+      "title": "从模型输出到喷药作业建议",
+      "type": "Research Log",
+      "tags": [
+        "PyTorch",
+        "CV",
+        "Smart Agriculture"
+      ],
+      "brief": "记录病虫害分级、空间分布表达和农业作业建议之间的连接方式。"
+    }
+  ],
+  "techRadar": [
+    {
+      "name": "Go/API",
+      "value": 86
+    },
+    {
+      "name": "Python/Data",
+      "value": 92
+    },
+    {
+      "name": "CV/PyTorch",
+      "value": 88
+    },
+    {
+      "name": "Frontend",
+      "value": 82
+    },
+    {
+      "name": "Research",
+      "value": 84
+    },
+    {
+      "name": "LLM/RAG",
+      "value": 74
+    }
+  ],
+  "activity": [
+    {
+      "day": "Mon",
+      "score": 2,
+      "kind": "code"
+    },
+    {
+      "day": "Tue",
+      "score": 4,
+      "kind": "paper"
+    },
+    {
+      "day": "Wed",
+      "score": 3,
+      "kind": "experiment"
+    },
+    {
+      "day": "Thu",
+      "score": 5,
+      "kind": "code"
+    },
+    {
+      "day": "Fri",
+      "score": 4,
+      "kind": "project"
+    },
+    {
+      "day": "Sat",
+      "score": 2,
+      "kind": "reading"
+    },
+    {
+      "day": "Sun",
+      "score": 3,
+      "kind": "review"
+    },
+    {
+      "day": "Mon",
+      "score": 5,
+      "kind": "experiment"
+    },
+    {
+      "day": "Tue",
+      "score": 4,
+      "kind": "code"
+    },
+    {
+      "day": "Wed",
+      "score": 2,
+      "kind": "paper"
+    },
+    {
+      "day": "Thu",
+      "score": 3,
+      "kind": "reading"
+    },
+    {
+      "day": "Fri",
+      "score": 5,
+      "kind": "project"
+    },
+    {
+      "day": "Sat",
+      "score": 4,
+      "kind": "code"
+    },
+    {
+      "day": "Sun",
+      "score": 2,
+      "kind": "rest"
+    },
+    {
+      "day": "Mon",
+      "score": 3,
+      "kind": "paper"
+    },
+    {
+      "day": "Tue",
+      "score": 5,
+      "kind": "experiment"
+    },
+    {
+      "day": "Wed",
+      "score": 4,
+      "kind": "code"
+    },
+    {
+      "day": "Thu",
+      "score": 5,
+      "kind": "project"
+    }
+  ],
+  "serviceStack": [
+    {
+      "name": "Backend",
+      "items": [
+        "Go net/http",
+        "JSON API",
+        "Server-Sent Events",
+        "Static SPA hosting"
+      ]
+    },
+    {
+      "name": "Frontend",
+      "items": [
+        "Vue 3",
+        "Element Plus",
+        "Blog feed layout",
+        "Topic filters"
+      ]
+    },
+    {
+      "name": "AI/Data",
+      "items": [
+        "PyTorch",
+        "Vision data",
+        "Task validation",
+        "Reasoning visualization"
+      ]
+    }
+  ],
+  "readingLinks": [
+    {
+      "label": "ZYYO/homepage",
+      "type": "GitHub",
+      "href": "https://github.com/ZYYO666/homepage",
+      "note": "主页动效与布局参考"
+    },
+    {
+      "label": "iqboshi/platform",
+      "type": "GitHub",
+      "href": "https://github.com/iqboshi/platform",
+      "note": "当前项目源码"
+    },
+    {
+      "label": "React Flow Docs",
+      "type": "Docs",
+      "href": "https://reactflow.dev/",
+      "note": "流程画布"
+    }
+  ],
+  "labels": {
+    "brandInitial": "Z",
+    "profileGreeting": "Hello, I am",
+    "articlesEyebrow": "Project Posts",
+    "articlesTitle": "我的项目",
+    "tagsEyebrow": "Tags",
+    "tagsTitle": "标签",
+    "readingEyebrow": "Reading",
+    "readingTitle": "最近在读"
+  },
+  "uiText": {
+    "adminLogin": "管理员登录",
+    "adminLogout": "退出",
+    "adminReadOnly": "只读模式",
+    "allTag": "全部",
+    "backToTop": "回到顶部",
+    "checkinEyebrow": "Check-in",
+    "checkinMonth": "本月",
+    "checkinStreak": "连续",
+    "checkinTitle": "签到日历",
+    "contactButton": "联系我",
+    "contentManage": "内容管理",
+    "emptyProjectsAction": "查看全部",
+    "emptyProjectsBody": "换一个标签，或者先看全部项目。",
+    "emptyProjectsTitle": "没有匹配的项目帖",
+    "footerBuiltWith": "Built with Go and Vue.",
+    "readArticle": "阅读",
+    "todoEditAuthed": "设置每日 Todo",
+    "todoEditGuest": "登录后设置 Todo",
+    "todoEmpty": "当前没有每日 Todo。管理员可以设置长期任务。",
+    "todoEyebrow": "Daily Todo",
+    "todoTitle": "每日 Todo",
+    "worksButton": "在线作品"
+  }
+}

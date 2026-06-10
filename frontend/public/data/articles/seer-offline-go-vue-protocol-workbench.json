@@ -1,0 +1,444 @@
+{
+  "slug": "seer-offline-go-vue-protocol-workbench",
+  "category": "项目",
+  "date": "2026-06-04",
+  "title": "赛尔号脱机工具：Go/Vue 本地协议工具",
+  "excerpt": "一个用 Go 直接处理游戏协议、战斗状态和日常任务的本地 Web 工具，也为后续策略模型保留对战记录和训练数据出口。",
+  "tags": [
+    "Go",
+    "Vue",
+    "RL",
+    "Agent",
+    "TypeScript",
+    "Protocol",
+    "WebAPI",
+    "Automation"
+  ],
+  "body": [
+    "项目定位",
+    "这个项目不是用脚本点按钮，也不是给游戏套一层 UI。它的核心是直接和服务端协议交互：Go 负责 TCP 连接、协议包解析、业务命令、战斗状态、策略执行和日常任务；Vue 负责把这些功能做成一个本地网页。",
+    "我更关注的是让工具出了问题时能查清楚：每个包为什么发、在等哪个回包、当前战斗能不能行动、自动策略为什么选择这个动作、日常任务跑到哪一步，都应该能从代码和页面里追出来。",
+    "下面按几个关键模块说明：怎么读包、怎么等待回包、多个账号怎么隔离、战斗状态怎么更新、策略怎么执行、日常任务怎么跑，以及前端页面怎么组织。",
+    "战斗辅助页：左侧是我方阵容，中间是当前对局、策略预览和战斗日志，右侧是对方阵容。页面背后对应的是 Go 侧的战斗状态和策略执行代码。",
+    "代码怎么分工",
+    "我把项目按“协议包”和“游戏动作”拆开。底层只处理包头、命令号、body 和等待回包；中间层把命令封成游戏动作；上层才做背包、培养、战斗、日常任务和 Web API。这样不会在页面里拼包，也不会在协议解析层写业务判断。",
+    "TCP Client\n  -> protocol.Packet / BuildPacket / ParsePacket\n  -> gateway.Send / WaitCommandWithTimeoutContext / PacketAudit\n  -> game.Client: petbag, battle, cultivation, daily commands\n  -> domain services: battle, daily, loadout, pvpstrategy\n  -> webapi.Server + ConnectionInstance\n  -> Vue / Pinia / Element Plus local workbench",
+    "protocol 只关心包是否合法：长度、版本、命令号、用户 ID、序列号和 body。",
+    "gateway 负责发包、收包、按命令号等待，并记录审计事件。",
+    "game.Client 把具体命令封成方法，例如背包、恢复状态、培养、战斗动作。",
+    "battle/daily/pvpstrategy 负责战斗状态、任务步骤和策略选择，不直接暴露 socket 细节。",
+    "webapi 先解析 ConnectionInstance，再把请求交给这个账号实例下的会话、战斗状态和日常任务记录。",
+    "Vue 侧只消费 API DTO 和状态，不在前端构造协议包。",
+    "协议包模型",
+    "协议包头固定 17 字节。字节读取先收束成 Packet，再由 packets 包里的具体 parser 解释 body，而不是散落到各个业务模块。这样任何业务代码拿到的都是明确的 CmdID、UserID、SN 和 Body。",
+    "const (\n    HeaderSize    = 17\n    MaxPacketSize = 8 << 20\n)\n\ntype Packet struct {\n    Length  uint32\n    Version byte\n    CmdID   uint32\n    UserID  uint32\n    SN      uint32\n    Body    []byte\n}\n\nfunc ParsePacket(data []byte) (Packet, error) {\n    if len(data) < HeaderSize {\n        return Packet{}, fmt.Errorf(\"packet too short: got %d bytes\", len(data))\n    }\n    length := binary.BigEndian.Uint32(data[:4])\n    if length < HeaderSize {\n        return Packet{}, fmt.Errorf(\"invalid packet length: %d\", length)\n    }\n    if length > MaxPacketSize {\n        return Packet{}, fmt.Errorf(\"packet too large: %d > %d\", length, MaxPacketSize)\n    }\n    if int(length) != len(data) {\n        return Packet{}, fmt.Errorf(\"length mismatch: header=%d actual=%d\", length, len(data))\n    }\n    return Packet{\n        Length:  length,\n        Version: data[4],\n        CmdID:   binary.BigEndian.Uint32(data[5:9]),\n        UserID:  binary.BigEndian.Uint32(data[9:13]),\n        SN:      binary.BigEndian.Uint32(data[13:17]),\n        Body:    data[HeaderSize:],\n    }, nil\n}\n\nfunc BuildPacket(version byte, cmdID uint32, userID uint32, sn uint32, body []byte) []byte {\n    length := HeaderSize + len(body)\n    data := make([]byte, length)\n    binary.BigEndian.PutUint32(data[0:4], uint32(length))\n    data[4] = version\n    binary.BigEndian.PutUint32(data[5:9], cmdID)\n    binary.BigEndian.PutUint32(data[9:13], userID)\n    binary.BigEndian.PutUint32(data[13:17], sn)\n    copy(data[HeaderSize:], body)\n    return data\n}",
+    "这个模型看起来很朴素，但它决定了后面的工程风格：业务层不能绕过统一的包结构，也不能靠字符串或页面状态去猜服务端到底返回了什么。",
+    "读取与超时恢复",
+    "协议工具最怕的是读包超时后把 TCP 流读歪。读取逻辑会在 header 或 body 读到一半出错时，把已经读到的 partial bytes 放回 readBuffer，下一次读取继续使用；同时处理包前面的 0 padding，避免后面的包全部错位。",
+    "func (c *Client) ReadPacket() ([]byte, error) {\n    conn := c.conn()\n    if conn == nil {\n        return nil, fmt.Errorf(\"not connected\")\n    }\n\n    c.readMu.Lock()\n    defer c.readMu.Unlock()\n\n    header, err := c.readExactLocked(conn, protocol.HeaderSize)\n    if err != nil {\n        c.prependReadBufferLocked(header)\n        return nil, fmt.Errorf(\"read header failed: %w\", err)\n    }\n    if err := c.alignPacketHeaderLocked(conn, header); err != nil {\n        return nil, err\n    }\n\n    length := binary.BigEndian.Uint32(header[:4])\n    bodyLength := int(length) - protocol.HeaderSize\n    body, err := c.readExactLocked(conn, bodyLength)\n    if err != nil {\n        partial := make([]byte, 0, len(header)+len(body))\n        partial = append(partial, header...)\n        partial = append(partial, body...)\n        c.prependReadBufferLocked(partial)\n        return nil, fmt.Errorf(\"read body failed: %w\", err)\n    }\n\n    packet := make([]byte, 0, int(length))\n    packet = append(packet, header...)\n    packet = append(packet, body...)\n    return packet, nil\n}\n\nfunc (c *Client) prependReadBufferLocked(data []byte) {\n    if len(data) == 0 {\n        return\n    }\n    restored := make([]byte, 0, len(data)+len(c.readBuffer))\n    restored = append(restored, data...)\n    restored = append(restored, c.readBuffer...)\n    c.readBuffer = restored\n}",
+    "这类代码不直接出现在页面上，但它决定了工具能不能长时间稳定运行。自动战斗、日常任务和后台轮询都依赖这个读取路径，一旦丢字节，后面的状态判断全都会偏。",
+    "Gateway 等待模型",
+    "很多游戏动作不是“发一个包就结束”，而是发出命令后等待某个回包。Gateway 负责把这种模式固定下来：业务代码只说明要等哪个 CmdID，超时、取消信号、暂存包和审计事件都在这里统一处理。",
+    "func (g *Gateway) WaitCommandWithTimeoutContext(\n    ctx context.Context,\n    cmdID uint32,\n    timeout time.Duration,\n) (protocol.Packet, error) {\n    return g.waitForPacket(\n        ctx,\n        timeout,\n        matchCommand(cmdID),\n        fmt.Sprintf(\"cmd %d\", cmdID),\n        fmt.Sprintf(\"cmd %d not found before timeout %s\", cmdID, timeout),\n    )\n}\n\nfunc (g *Gateway) waitForPacket(\n    ctx context.Context,\n    timeout time.Duration,\n    match func(protocol.Packet) bool,\n    label string,\n    timeoutMessage string,\n) (protocol.Packet, error) {\n    if packet, ok := g.popPendingMatchLocked(match); ok {\n        return packet, nil\n    }\n    if timeout > 0 {\n        // 设置读取截止时间；读取循环中收到不匹配的包会进入 pending。\n    }\n    // 后续逻辑持续读取、匹配、记录审计事件，直到命中、超时或取消。\n}",
+    "上层方法就可以写得很清楚：发恢复状态命令，然后等恢复状态回包，再解析 body。业务层不需要手动循环读 socket。",
+    "func (c *Client) RestoreBagPetStatusContext(ctx context.Context, timeout time.Duration) (packets.PetStatusRestore2306Result, error) {\n    if ctx == nil {\n        ctx = context.Background()\n    }\n    if _, err := c.RequestRestoreBagPetStatus(); err != nil {\n        return packets.PetStatusRestore2306Result{}, err\n    }\n\n    packet, err := c.gateway.WaitCommandWithTimeoutContext(ctx, protocol.CmdRestoreBagPetStatus, timeout)\n    if err != nil {\n        return packets.PetStatusRestore2306Result{}, err\n    }\n    return packets.ParsePetStatusRestore2306Result(packet.Body)\n}",
+    "多个账号怎么隔离",
+    "项目后面要支持多个账号同时使用，所以我没有把 session、battle、audit、daily runs 放成 Server 级全局状态。ConnectionInstance 表示一个正在运行的账号实例：它拥有一条游戏连接，以及这条连接对应的战斗、日志和日常任务状态。",
+    "type ConnectionInstance struct {\n    metaMu       sync.RWMutex\n    ownerID      ToolUserID\n    id           string\n    label        string\n    sessions     *SessionManager\n    battle       *BattleRuntime\n    battleAction *BattleActionService\n    packetAudit  *PacketAudit\n    dailyRuns    *dailyExecutionStore\n    createdAt    time.Time\n    lastActiveAt time.Time\n    lastAccount  string\n    lastUserID   uint32\n}\n\nfunc NewConnectionInstance(opts ConnectionInstanceOptions) *ConnectionInstance {\n    sessions := opts.Client\n    if sessions == nil {\n        sessions = NewSessionManager(nil, now)\n    }\n    packetAudit := NewPacketAudit(now)\n    battleRuntime := NewBattleRuntimeWithNow(now)\n\n    instance := &ConnectionInstance{\n        ownerID:      ownerID,\n        id:           id,\n        label:        label,\n        sessions:     sessions,\n        battle:       battleRuntime,\n        packetAudit:  packetAudit,\n        dailyRuns:    newDailyExecutionStore(now),\n        createdAt:    createdAt,\n        lastActiveAt: createdAt,\n    }\n    sessions.SetPacketObserver(packetAudit)\n    instance.battleAction = NewBattleActionService(BattleActionServiceOptions{\n        Sessions: sessions,\n        Runtime:  battleRuntime,\n    })\n    return instance\n}",
+    "这样请求处理会更稳定：API 先根据当前工具用户和实例 ID 找到对应账号，再操作这个账号下的战斗状态或日常任务记录。以后做多账号并发时，不需要把旧的全局变量一层层改成 map。",
+    "Web API 装配",
+    "Server 的职责是把资源目录、账号仓库、连接实例管理器、策略库和路由装起来。初始化时会创建默认实例，并把旧接口接到这个实例上；新增功能也先找到实例，再操作实例里的状态。",
+    "func NewServer(opts Options) *Server {\n    paths := opts.RuntimePaths\n    if strings.TrimSpace(paths.DataDir) == \"\" && strings.TrimSpace(paths.CacheDir) == \"\" {\n        paths = runtimepaths.FromEnv()\n    } else {\n        paths = paths.WithDefaults()\n    }\n\n    s := &Server{\n        mux:           http.NewServeMux(),\n        runtimePaths:  paths,\n        accountStores: newAccountScopedStoreRegistry(paths),\n        accountPrefs:  accountprefs.NewStore(paths),\n        loginVault:    loginvault.NewStore(paths, now),\n        pvpStrategyStores: newPVPStrategyStoreRegistry(paths),\n    }\n\n    instance := s.newConnectionInstance(localToolUserID, defaultConnectionInstanceID, \"默认连接\", opts.SessionManager)\n    s.instances = NewConnectionInstanceManager(instance)\n    s.sessions = instance.sessions\n    s.battle = instance.battle\n    s.battleActions = instance.battleAction\n    s.packetAudit = instance.packetAudit\n    s.dailyRuns = instance.dailyRuns\n    s.routes()\n    return s\n}",
+    "func (s *Server) routes() {\n    s.mux.HandleFunc(\"/api/instances\", s.handleInstances)\n    s.mux.HandleFunc(\"/api/session/login\", s.handleSessionLogin)\n    s.mux.HandleFunc(\"/api/petbag\", s.handlePetBag)\n    s.mux.HandleFunc(\"/api/daily/\", s.handleDailyRoute)\n    s.mux.HandleFunc(\"/api/pvp-strategy/\", s.handlePVPStrategyRoute)\n    s.mux.HandleFunc(\"/api/battle/state\", s.handleBattleState)\n    s.mux.HandleFunc(\"/api/battle/match/start\", s.handleBattleStartMatch)\n    s.mux.HandleFunc(\"/api/battle/action/skill\", s.handleBattleUseSkill)\n    s.mux.HandleFunc(\"/api/battle/action/change-pet\", s.handleBattleChangePet)\n    s.mux.HandleFunc(\"/api/battle/auto/start\", s.handleBattleAutoStart)\n    s.mux.HandleFunc(\"/api/\", s.handleAPINotFound)\n    s.mux.HandleFunc(\"/\", s.handleStatic)\n}",
+    "战斗状态建模",
+    "战斗模块不是把 UI 上看到的血条存一下。它从协议包建立状态：2503 是开局和双方阵容快照，2505 是技能回合结果，2506 是战斗结束，2595 是战斗效果面板。每种包先进 packets parser，再转成 battle.Session 里的结构。",
+    "type Service struct {\n    Session *Session\n}\n\nfunc NewService() *Service {\n    return &Service{Session: NewSession()}\n}\n\nfunc (s *Service) ApplyReadyPacket(packet packets.FightNoteReady2503, selfUserID uint32) ReadyState {\n    ready := ReadyStateFrom2503(packet, selfUserID)\n    s.Session.ApplyReady(ready)\n    return ready\n}\n\nfunc (s *Service) ApplySkillPacket(packet packets.FightNoteUseSkill2505) SkillTurn {\n    turn := SkillTurnFrom2505(packet)\n    s.Session.ApplySkillTurn(turn)\n    return turn\n}\n\nfunc (s *Service) ApplyFightOverPacket(packet packets.FightOver2506) FightOver {\n    over := FightOverFrom2506(packet)\n    s.Session.ApplyFightOver(over)\n    return over\n}",
+    "ReadyStateFrom2503 负责把原始 ready packet 转成领域模型，并根据 selfUserID 区分我方和对方。这个步骤之后，后续策略不需要关心原始 offset 和 body 字节布局。",
+    "func ReadyStateFrom2503(packet packets.FightNoteReady2503, selfUserID uint32) ReadyState {\n    ready := ReadyState{\n        Mode:        packet.Mode,\n        EFFightType: packet.EFFightType,\n        SelfUserID:  selfUserID,\n        MyIndex:     -1,\n        RivalIndex:  -1,\n        Fighters:    make([]ReadyFighter, 0, len(packet.Fighters)),\n    }\n\n    for i, fighter := range packet.Fighters {\n        isRival := fighter.UserID != selfUserID\n        modelFighter := readyFighterFrom2503(fighter, isRival)\n        if fighter.UserID == selfUserID {\n            ready.MyIndex = i\n        } else {\n            ready.RivalIndex = i\n        }\n        ready.Fighters = append(ready.Fighters, modelFighter)\n    }\n    return ready\n}",
+    "策略需要的局面信息",
+    "自动战斗不能直接拿“当前血量”做判断。它需要知道当前阶段、是否可行动、是否必须强制换宠、技能是否可用、触发原因、我方/对方在场精灵、后备精灵、状态效果和上一回合结果。代码里的 DecisionContext 就是把这些信息整理成策略输入。",
+    "type DecisionContext struct {\n    Phase                 Phase\n    Mode                  uint32\n    SelfUserID            uint32\n    RivalUserID           uint32\n    TurnCount             uint32\n    CanAct                bool\n    CanUseSkill           bool\n    CanChangePet          bool\n    NeedsForcedSwitch     bool\n    ForcedSwitchCatchTime uint32\n    Trigger               DecisionTrigger\n\n    Self  DecisionFighterContext\n    Rival DecisionFighterContext\n\n    Conditions    DecisionConditionSnapshot\n    BP            *BPState\n    LastEntry     *EntryEvent\n    LastOutcome   *BattleOutcome\n    LastSkillTurn *SkillTurn\n}\n\nfunc BuildDecisionContext(session *Session, canAct bool) DecisionContext {\n    ctx := DecisionContext{CanAct: canAct}\n    if session == nil || session.Ready == nil {\n        return ctx\n    }\n\n    ready := session.Ready\n    ctx.Mode = ready.Mode\n    ctx.SelfUserID = ready.SelfUserID\n    ctx.TurnCount = session.TurnCount\n    ctx.ForcedSwitchCatchTime = session.ForcedSwitchCatchTime(ctx.Self.UserID)\n    ctx.NeedsForcedSwitch = ctx.Self.Active.CatchTime != 0 &&\n        (ctx.Self.Active.CurrentHP == 0 || ctx.ForcedSwitchCatchTime != 0) &&\n        session.Phase != PhaseFinished\n    ctx.CanUseSkill = canAct && !ctx.NeedsForcedSwitch && ctx.Self.Active.Alive && hasUsableDecisionSkill(ctx.Self.Active.Skills)\n    ctx.CanChangePet = canAct && canChangeDecisionPet(ctx.Self.Team, ctx.Self.Active.CatchTime, ctx.ForcedSwitchCatchTime)\n    ctx.Trigger = decisionTrigger(ctx)\n    ctx.Conditions = decisionConditions(ctx)\n    return ctx\n}",
+    "策略层的重点不是让结果看起来“很会玩”，而是先把什么能做、什么不能做说清楚。比如必须强制换宠时，出招动作就不应该进入可执行候选。",
+    "策略预览与执行",
+    "PVP 策略库会先根据当前局面生成预览结果：推荐什么动作、为什么推荐、是否能自动执行。执行前还会做二次检查，不能因为策略脚本写了一个动作就直接发包。",
+    "func (s *Server) previewBattleStrategyDecisionForRuntime(\n    ctx context.Context,\n    runtime *BattleRuntime,\n    instance *ConnectionInstance,\n) (battleStrategyDecision, error) {\n    if runtime == nil {\n        return battleStrategyDecision{}, fmt.Errorf(\"battle runtime is not initialized\")\n    }\n    decision, err := runtime.DecisionContext()\n    if err != nil {\n        return battleStrategyDecision{}, err\n    }\n    decision = s.enrichDecisionContext(ctx, decision)\n    executionState := runtime.StrategyExecutionState()\n    result := battleStrategyDecision{\n        Context: decision,\n        Preview: pvpstrategy.PreviewWithExecutionState(\n            decision,\n            s.runtimePolicyForDecisionForInstance(instance, decision),\n            executionState,\n        ),\n        Settings: runtime.Settings(),\n    }\n    return withAutoBattleControlItemFallback(result), nil\n}",
+    "func evaluateSkillAction(ctx battle.DecisionContext, plan ActionPlan, action ActionToken, skillID uint32) (*ActionDecision, string) {\n    if skillID == 0 {\n        return nil, \"技能 ID 为空\"\n    }\n    if !ctx.CanAct {\n        return nil, \"当前还不能行动\"\n    }\n    if ctx.NeedsForcedSwitch {\n        return nil, \"当前必须先换宠，不能出招\"\n    }\n    if !ctx.Self.Active.Alive {\n        return nil, \"我方当前精灵已死亡\"\n    }\n    skill, ok := findSkill(ctx.Self.Active.Skills, skillID)\n    if !ok {\n        return nil, fmt.Sprintf(\"当前技能栏没有技能 %d\", skillID)\n    }\n    if !skill.Usable {\n        return nil, skill.UnavailableReason\n    }\n    return &ActionDecision{\n        Action:     action,\n        PlanID:     plan.ID,\n        Reason:     fmt.Sprintf(\"技能 %d 当前可用\", skillID),\n        SkillID:    skillID,\n        Executable: true,\n    }, \"\"\n}",
+    "页面里看到的“策略预览”和“下一步建议”，背后不是写死文案，而是由战斗状态服务整理当前局面，策略库匹配计划，再经过可执行性检查得到的结果。",
+    "强化学习接入预留",
+    "强化学习不会直接接管发包。现有结构已经把 RL 需要的几件事拆出来了：DecisionContext 提供局面信息，pvpstrategy 作为可读的规则基线，BattleRecord 和 packet audit 负责保存对战记录，BattleActionService 仍然是唯一执行动作的地方。模型只负责给建议，动作必须经过合法动作检查和安全检查。",
+    "服务端包 2503 / 2407 / 2505 / 2595 / 2506\n  -> battle.Session 按真实包序更新状态\n  -> DecisionContext 生成 s_k：行动前局面、可行动窗口、双方状态、技能可用性\n  -> battleai.Observation + ActionMask：合法动作、强制换宠、可用技能、可换后备\n  -> RuleAgent / BehaviorCloneAgent / RankingAgent / RLAgent 给出候选动作\n  -> 决策网关过滤非法动作与低置信度动作\n  -> BattleActionService 发送 2405 / 2406 / 2407\n  -> 2505 / 2595 / 2506 进入 settlement、post_state、reward\n  -> transition 写入训练数据与回放记录",
+    "最关键的是时间切片：s_k 只能包含动作发出前已经知道的状态，2505 结算结果不能提前混进 observation。否则模型会在训练时“偷看答案”。因此数据导出会把 decision、raw_packet_event、protocol_event、settlement_result、post_state 和 terminal 分开保存。",
+    "{\n  \"episodeId\": \"battle_20260604_001\",\n  \"step\": 3,\n  \"s\": \"DecisionContext before action\",\n  \"actionMask\": {\n    \"canUseSkill\": true,\n    \"usableSkillIds\": [38019, 15005],\n    \"canChangePet\": true,\n    \"aliveBenchCatchTimes\": [100221, 100337]\n  },\n  \"a\": {\n    \"kind\": \"use_skill\",\n    \"skillId\": 38019\n  },\n  \"settlement\": \"2505 result after action\",\n  \"sNext\": \"state after 2407/2505/2595 applied\",\n  \"rewardParts\": {\n    \"terminal\": 0,\n    \"hpDelta\": 4.0,\n    \"controlApplied\": 0,\n    \"invalidActionPenalty\": 0\n  },\n  \"done\": false,\n  \"sourcePolicy\": \"pvpstrategy:rule-agent\",\n  \"labelQuality\": \"weak_or_curated\"\n}",
+    "第一步不是在线探索，而是把现有战斗记录导出为 transitions.jsonl，先做离线评估。",
+    "PVP 初期会先只给建议、不接管操作，真实出招仍由现有策略执行。",
+    "行为克隆或动作排序会先学会在合法动作集合里排序，不生成不存在的技能或 catchTime。",
+    "真正自动执行前必须经过 action mask、置信度阈值和 fallback；低置信度回退到安全过滤后的规则策略。",
+    "reward 只用于训练和评估，不替代业务规则；执行层仍然只认 BattleActionService。",
+    "日常任务怎么跑",
+    "日常任务模块同样不把流程写成一堆按钮点击。每个任务有 ID、分类、参数、步骤、是否使用 PVE、是否已验证；执行时会记录检查点，支持运行中取消，并区分 skipped、failed、stopped、sent 等状态。",
+    "var registeredTasks = []Task{\n    {\n        ID:          \"beast_power\",\n        Name:        \"神兽之威\",\n        Category:    CategoryUnity,\n        UsesPVE:     true,\n        Verified:    false,\n        StatusLabel: \"未验证\",\n        Summary:     \"困难难度挑战流程，使用所选 PVE 战斗方案执行。\",\n        Parameters: []Parameter{\n            battlePresetParam(),\n            difficultyParam(),\n            fixedEncourageParam(\"no\", \"关闭\"),\n        },\n        Steps: []string{\n            \"读取任务状态\",\n            \"如绑定账号配置，先记录并替换当前配置\",\n            \"应用所选 PVE 配置\",\n            \"进入战斗并按出招方案行动\",\n            \"根据完成状态停止或继续\",\n            \"恢复原配置\",\n        },\n    },\n}",
+    "func (s Service) execute(client Client, opts ExecuteOptions) (ExecuteResult, error) {\n    ctx := opts.Context\n    if ctx == nil {\n        ctx = context.Background()\n    }\n    task, err := FindTask(opts.TaskID)\n    if err != nil {\n        return ExecuteResult{}, err\n    }\n\n    result := ExecuteResult{\n        TaskID:    task.ID,\n        TaskName:  task.Name,\n        Status:    \"running\",\n        Verified:  task.Verified,\n        StartedAt: now(),\n        progress:  opts.Progress,\n    }\n    result.Checkpoint(\"开始执行\")\n\n    if task.UsesPVE {\n        result, err = s.executePVEDailyScaffold(ctx, task, result, opts)\n    } else {\n        switch task.ID {\n        case \"friendship_star_gift\":\n            result, err = s.executeFriendship(ctx, client, result, timeout)\n        case \"six_realm_palace_sweep\":\n            result, err = s.executeSixRealm(ctx, client, result, opts.Params, timeout)\n        default:\n            err = fmt.Errorf(\"daily task executor not implemented: %s\", task.ID)\n        }\n    }\n\n    result.EndedAt = now()\n    return result, err\n}",
+    "这个结构的好处是每个任务都可以先进入可配置、可展示、可记录的状态，再逐步把已验证的发包流程接进去。未验证任务不会伪装成已完成，页面和日志都能看见真实状态。",
+    "Vue 页面",
+    "前端使用 Vue、Pinia 和 Element Plus。它不是静态看板，而是持续拉取后端状态，并且按 activeInstanceId 隔离不同连接实例的数据。战斗请求还做了串行队列，避免连续点击或轮询把同一个实例的战斗动作打乱。",
+    "const battleRequestQueues = new Map<string, Promise<void>>();\n\nasync function runSerializedBattleRequest<T>(instanceId: string, task: () => Promise<T>): Promise<T> {\n  const key = instanceId || 'default';\n  const previous = battleRequestQueues.get(key) ?? Promise.resolve();\n  let release!: () => void;\n  const current = new Promise<void>((resolve) => {\n    release = resolve;\n  });\n  const queued = previous.catch(() => undefined).then(() => current);\n  battleRequestQueues.set(key, queued);\n  await previous.catch(() => undefined);\n  try {\n    return await task();\n  } finally {\n    release();\n    if (battleRequestQueues.get(key) === queued) {\n      battleRequestQueues.delete(key);\n    }\n  }\n}",
+    "export const useConnectionInstancesStore = defineStore('connectionInstances', {\n  state: () => ({\n    toolUserId: 'local',\n    defaultInstanceId: 'default',\n    activeInstanceId: loadStoredActiveInstanceId('local'),\n    instances: [] as ConnectionInstanceDTO[],\n    loading: false,\n    operating: false,\n    error: '',\n  }),\n  getters: {\n    activeInstance: (state): ConnectionInstanceDTO | null =>\n      state.instances.find((instance) => instance.id === state.activeInstanceId) ??\n      state.instances.find((instance) => instance.id === state.defaultInstanceId) ??\n      state.instances[0] ??\n      null,\n  },\n  actions: {\n    setActive(instanceId: string) {\n      const nextID = instanceId || this.defaultInstanceId || 'default';\n      this.activeInstanceId = nextID;\n      storeActiveInstanceId(this.toolUserId, nextID);\n    },\n  },\n});",
+    "页面上能看到的背包培养、账号资源、战斗、PVP 策略库、日常任务、日志和服务检查，都只是操作按钮。真正让它能稳定跑起来的，是前后端都按同一套实例状态和 DTO 来读写。",
+    "一些工程取舍",
+    "这个项目没有把功能堆到页面上，而是把不稳定的外部协议拆成能读、能测、出错后能恢复的几层。协议读取要考虑错位恢复，命令等待要考虑 pending 和超时，战斗策略要先拿到可靠的局面信息，日常任务要区分已验证和未验证流程，Web API 也要给多账号留出空间。",
+    "Go 侧：TCP 协议、二进制解析、超时控制、账号实例隔离、战斗状态、任务执行、单元测试。",
+    "前端侧：Vue + Pinia 状态管理、实例切换、轮询与操作串行化、复杂页面布局。",
+    "工程侧：从抓包记录整理出协议模型，把脚本经验转成可以反复测试的服务能力，不用兼容分支掩盖脏状态。",
+    "AI/RL 侧：已经把 observation、action mask、策略基线、执行器和回放记录拆开，后续能接行为克隆、动作排序和强化学习。",
+    "页面侧：操作面板只呈现当前系统真实状态，不用静态说明替代运行结果。",
+    "后面还想做什么",
+    "继续把日常任务从框架代码推进到更多已验证发包流程，并保留执行证据。",
+    "完善战斗录像和 packet audit 的导出，让策略错误能回放定位。",
+    "把默认实例扩展成更完整的账号选择和实例复用。",
+    "给 PVP 策略增加更清晰的说明：命中的规则、被拒绝的动作、兜底策略触发原因。",
+    "新增 battleai 数据导出，把当前局面转成 observation、合法动作集合和训练样本，为强化学习和 Agent 只观察不接管的模式准备数据。"
+  ],
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "项目定位"
+    },
+    {
+      "type": "paragraph",
+      "text": "这个项目不是用脚本点按钮，也不是给游戏套一层 UI。它的核心是直接和服务端协议交互：Go 负责 TCP 连接、协议包解析、业务命令、战斗状态、策略执行和日常任务；Vue 负责把这些功能做成一个本地网页。"
+    },
+    {
+      "type": "paragraph",
+      "text": "我更关注的是让工具出了问题时能查清楚：每个包为什么发、在等哪个回包、当前战斗能不能行动、自动策略为什么选择这个动作、日常任务跑到哪一步，都应该能从代码和页面里追出来。"
+    },
+    {
+      "type": "callout",
+      "text": "下面按几个关键模块说明：怎么读包、怎么等待回包、多个账号怎么隔离、战斗状态怎么更新、策略怎么执行、日常任务怎么跑，以及前端页面怎么组织。",
+      "title": "主要看点"
+    },
+    {
+      "type": "image",
+      "src": "/assets/seer-offline-battle.png",
+      "alt": "赛尔号脱机工具战斗辅助页面截图",
+      "caption": "战斗辅助页：左侧是我方阵容，中间是当前对局、策略预览和战斗日志，右侧是对方阵容。页面背后对应的是 Go 侧的战斗状态和策略执行代码。"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "代码怎么分工"
+    },
+    {
+      "type": "paragraph",
+      "text": "我把项目按“协议包”和“游戏动作”拆开。底层只处理包头、命令号、body 和等待回包；中间层把命令封成游戏动作；上层才做背包、培养、战斗、日常任务和 Web API。这样不会在页面里拼包，也不会在协议解析层写业务判断。"
+    },
+    {
+      "type": "code",
+      "language": "text",
+      "filename": "seer_offline/layers.txt",
+      "code": "TCP Client\n  -> protocol.Packet / BuildPacket / ParsePacket\n  -> gateway.Send / WaitCommandWithTimeoutContext / PacketAudit\n  -> game.Client: petbag, battle, cultivation, daily commands\n  -> domain services: battle, daily, loadout, pvpstrategy\n  -> webapi.Server + ConnectionInstance\n  -> Vue / Pinia / Element Plus local workbench"
+    },
+    {
+      "type": "list",
+      "items": [
+        "protocol 只关心包是否合法：长度、版本、命令号、用户 ID、序列号和 body。",
+        "gateway 负责发包、收包、按命令号等待，并记录审计事件。",
+        "game.Client 把具体命令封成方法，例如背包、恢复状态、培养、战斗动作。",
+        "battle/daily/pvpstrategy 负责战斗状态、任务步骤和策略选择，不直接暴露 socket 细节。",
+        "webapi 先解析 ConnectionInstance，再把请求交给这个账号实例下的会话、战斗状态和日常任务记录。",
+        "Vue 侧只消费 API DTO 和状态，不在前端构造协议包。"
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "协议包模型"
+    },
+    {
+      "type": "paragraph",
+      "text": "协议包头固定 17 字节。字节读取先收束成 Packet，再由 packets 包里的具体 parser 解释 body，而不是散落到各个业务模块。这样任何业务代码拿到的都是明确的 CmdID、UserID、SN 和 Body。"
+    },
+    {
+      "type": "code",
+      "language": "go",
+      "filename": "internal/protocol/packet.go",
+      "code": "const (\n    HeaderSize    = 17\n    MaxPacketSize = 8 << 20\n)\n\ntype Packet struct {\n    Length  uint32\n    Version byte\n    CmdID   uint32\n    UserID  uint32\n    SN      uint32\n    Body    []byte\n}\n\nfunc ParsePacket(data []byte) (Packet, error) {\n    if len(data) < HeaderSize {\n        return Packet{}, fmt.Errorf(\"packet too short: got %d bytes\", len(data))\n    }\n    length := binary.BigEndian.Uint32(data[:4])\n    if length < HeaderSize {\n        return Packet{}, fmt.Errorf(\"invalid packet length: %d\", length)\n    }\n    if length > MaxPacketSize {\n        return Packet{}, fmt.Errorf(\"packet too large: %d > %d\", length, MaxPacketSize)\n    }\n    if int(length) != len(data) {\n        return Packet{}, fmt.Errorf(\"length mismatch: header=%d actual=%d\", length, len(data))\n    }\n    return Packet{\n        Length:  length,\n        Version: data[4],\n        CmdID:   binary.BigEndian.Uint32(data[5:9]),\n        UserID:  binary.BigEndian.Uint32(data[9:13]),\n        SN:      binary.BigEndian.Uint32(data[13:17]),\n        Body:    data[HeaderSize:],\n    }, nil\n}\n\nfunc BuildPacket(version byte, cmdID uint32, userID uint32, sn uint32, body []byte) []byte {\n    length := HeaderSize + len(body)\n    data := make([]byte, length)\n    binary.BigEndian.PutUint32(data[0:4], uint32(length))\n    data[4] = version\n    binary.BigEndian.PutUint32(data[5:9], cmdID)\n    binary.BigEndian.PutUint32(data[9:13], userID)\n    binary.BigEndian.PutUint32(data[13:17], sn)\n    copy(data[HeaderSize:], body)\n    return data\n}"
+    },
+    {
+      "type": "paragraph",
+      "text": "这个模型看起来很朴素，但它决定了后面的工程风格：业务层不能绕过统一的包结构，也不能靠字符串或页面状态去猜服务端到底返回了什么。"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "读取与超时恢复"
+    },
+    {
+      "type": "paragraph",
+      "text": "协议工具最怕的是读包超时后把 TCP 流读歪。读取逻辑会在 header 或 body 读到一半出错时，把已经读到的 partial bytes 放回 readBuffer，下一次读取继续使用；同时处理包前面的 0 padding，避免后面的包全部错位。"
+    },
+    {
+      "type": "code",
+      "language": "go",
+      "filename": "internal/client/client.go",
+      "code": "func (c *Client) ReadPacket() ([]byte, error) {\n    conn := c.conn()\n    if conn == nil {\n        return nil, fmt.Errorf(\"not connected\")\n    }\n\n    c.readMu.Lock()\n    defer c.readMu.Unlock()\n\n    header, err := c.readExactLocked(conn, protocol.HeaderSize)\n    if err != nil {\n        c.prependReadBufferLocked(header)\n        return nil, fmt.Errorf(\"read header failed: %w\", err)\n    }\n    if err := c.alignPacketHeaderLocked(conn, header); err != nil {\n        return nil, err\n    }\n\n    length := binary.BigEndian.Uint32(header[:4])\n    bodyLength := int(length) - protocol.HeaderSize\n    body, err := c.readExactLocked(conn, bodyLength)\n    if err != nil {\n        partial := make([]byte, 0, len(header)+len(body))\n        partial = append(partial, header...)\n        partial = append(partial, body...)\n        c.prependReadBufferLocked(partial)\n        return nil, fmt.Errorf(\"read body failed: %w\", err)\n    }\n\n    packet := make([]byte, 0, int(length))\n    packet = append(packet, header...)\n    packet = append(packet, body...)\n    return packet, nil\n}\n\nfunc (c *Client) prependReadBufferLocked(data []byte) {\n    if len(data) == 0 {\n        return\n    }\n    restored := make([]byte, 0, len(data)+len(c.readBuffer))\n    restored = append(restored, data...)\n    restored = append(restored, c.readBuffer...)\n    c.readBuffer = restored\n}"
+    },
+    {
+      "type": "paragraph",
+      "text": "这类代码不直接出现在页面上，但它决定了工具能不能长时间稳定运行。自动战斗、日常任务和后台轮询都依赖这个读取路径，一旦丢字节，后面的状态判断全都会偏。"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "Gateway 等待模型"
+    },
+    {
+      "type": "paragraph",
+      "text": "很多游戏动作不是“发一个包就结束”，而是发出命令后等待某个回包。Gateway 负责把这种模式固定下来：业务代码只说明要等哪个 CmdID，超时、取消信号、暂存包和审计事件都在这里统一处理。"
+    },
+    {
+      "type": "code",
+      "language": "go",
+      "filename": "internal/gateway/gateway.go",
+      "code": "func (g *Gateway) WaitCommandWithTimeoutContext(\n    ctx context.Context,\n    cmdID uint32,\n    timeout time.Duration,\n) (protocol.Packet, error) {\n    return g.waitForPacket(\n        ctx,\n        timeout,\n        matchCommand(cmdID),\n        fmt.Sprintf(\"cmd %d\", cmdID),\n        fmt.Sprintf(\"cmd %d not found before timeout %s\", cmdID, timeout),\n    )\n}\n\nfunc (g *Gateway) waitForPacket(\n    ctx context.Context,\n    timeout time.Duration,\n    match func(protocol.Packet) bool,\n    label string,\n    timeoutMessage string,\n) (protocol.Packet, error) {\n    if packet, ok := g.popPendingMatchLocked(match); ok {\n        return packet, nil\n    }\n    if timeout > 0 {\n        // 设置读取截止时间；读取循环中收到不匹配的包会进入 pending。\n    }\n    // 后续逻辑持续读取、匹配、记录审计事件，直到命中、超时或取消。\n}"
+    },
+    {
+      "type": "paragraph",
+      "text": "上层方法就可以写得很清楚：发恢复状态命令，然后等恢复状态回包，再解析 body。业务层不需要手动循环读 socket。"
+    },
+    {
+      "type": "code",
+      "language": "go",
+      "filename": "internal/game/client.go",
+      "code": "func (c *Client) RestoreBagPetStatusContext(ctx context.Context, timeout time.Duration) (packets.PetStatusRestore2306Result, error) {\n    if ctx == nil {\n        ctx = context.Background()\n    }\n    if _, err := c.RequestRestoreBagPetStatus(); err != nil {\n        return packets.PetStatusRestore2306Result{}, err\n    }\n\n    packet, err := c.gateway.WaitCommandWithTimeoutContext(ctx, protocol.CmdRestoreBagPetStatus, timeout)\n    if err != nil {\n        return packets.PetStatusRestore2306Result{}, err\n    }\n    return packets.ParsePetStatusRestore2306Result(packet.Body)\n}"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "多个账号怎么隔离"
+    },
+    {
+      "type": "paragraph",
+      "text": "项目后面要支持多个账号同时使用，所以我没有把 session、battle、audit、daily runs 放成 Server 级全局状态。ConnectionInstance 表示一个正在运行的账号实例：它拥有一条游戏连接，以及这条连接对应的战斗、日志和日常任务状态。"
+    },
+    {
+      "type": "code",
+      "language": "go",
+      "filename": "internal/webapi/connection_instance.go",
+      "code": "type ConnectionInstance struct {\n    metaMu       sync.RWMutex\n    ownerID      ToolUserID\n    id           string\n    label        string\n    sessions     *SessionManager\n    battle       *BattleRuntime\n    battleAction *BattleActionService\n    packetAudit  *PacketAudit\n    dailyRuns    *dailyExecutionStore\n    createdAt    time.Time\n    lastActiveAt time.Time\n    lastAccount  string\n    lastUserID   uint32\n}\n\nfunc NewConnectionInstance(opts ConnectionInstanceOptions) *ConnectionInstance {\n    sessions := opts.Client\n    if sessions == nil {\n        sessions = NewSessionManager(nil, now)\n    }\n    packetAudit := NewPacketAudit(now)\n    battleRuntime := NewBattleRuntimeWithNow(now)\n\n    instance := &ConnectionInstance{\n        ownerID:      ownerID,\n        id:           id,\n        label:        label,\n        sessions:     sessions,\n        battle:       battleRuntime,\n        packetAudit:  packetAudit,\n        dailyRuns:    newDailyExecutionStore(now),\n        createdAt:    createdAt,\n        lastActiveAt: createdAt,\n    }\n    sessions.SetPacketObserver(packetAudit)\n    instance.battleAction = NewBattleActionService(BattleActionServiceOptions{\n        Sessions: sessions,\n        Runtime:  battleRuntime,\n    })\n    return instance\n}"
+    },
+    {
+      "type": "paragraph",
+      "text": "这样请求处理会更稳定：API 先根据当前工具用户和实例 ID 找到对应账号，再操作这个账号下的战斗状态或日常任务记录。以后做多账号并发时，不需要把旧的全局变量一层层改成 map。"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "Web API 装配"
+    },
+    {
+      "type": "paragraph",
+      "text": "Server 的职责是把资源目录、账号仓库、连接实例管理器、策略库和路由装起来。初始化时会创建默认实例，并把旧接口接到这个实例上；新增功能也先找到实例，再操作实例里的状态。"
+    },
+    {
+      "type": "code",
+      "language": "go",
+      "filename": "internal/webapi/server.go",
+      "code": "func NewServer(opts Options) *Server {\n    paths := opts.RuntimePaths\n    if strings.TrimSpace(paths.DataDir) == \"\" && strings.TrimSpace(paths.CacheDir) == \"\" {\n        paths = runtimepaths.FromEnv()\n    } else {\n        paths = paths.WithDefaults()\n    }\n\n    s := &Server{\n        mux:           http.NewServeMux(),\n        runtimePaths:  paths,\n        accountStores: newAccountScopedStoreRegistry(paths),\n        accountPrefs:  accountprefs.NewStore(paths),\n        loginVault:    loginvault.NewStore(paths, now),\n        pvpStrategyStores: newPVPStrategyStoreRegistry(paths),\n    }\n\n    instance := s.newConnectionInstance(localToolUserID, defaultConnectionInstanceID, \"默认连接\", opts.SessionManager)\n    s.instances = NewConnectionInstanceManager(instance)\n    s.sessions = instance.sessions\n    s.battle = instance.battle\n    s.battleActions = instance.battleAction\n    s.packetAudit = instance.packetAudit\n    s.dailyRuns = instance.dailyRuns\n    s.routes()\n    return s\n}"
+    },
+    {
+      "type": "code",
+      "language": "go",
+      "filename": "internal/webapi/server.go",
+      "code": "func (s *Server) routes() {\n    s.mux.HandleFunc(\"/api/instances\", s.handleInstances)\n    s.mux.HandleFunc(\"/api/session/login\", s.handleSessionLogin)\n    s.mux.HandleFunc(\"/api/petbag\", s.handlePetBag)\n    s.mux.HandleFunc(\"/api/daily/\", s.handleDailyRoute)\n    s.mux.HandleFunc(\"/api/pvp-strategy/\", s.handlePVPStrategyRoute)\n    s.mux.HandleFunc(\"/api/battle/state\", s.handleBattleState)\n    s.mux.HandleFunc(\"/api/battle/match/start\", s.handleBattleStartMatch)\n    s.mux.HandleFunc(\"/api/battle/action/skill\", s.handleBattleUseSkill)\n    s.mux.HandleFunc(\"/api/battle/action/change-pet\", s.handleBattleChangePet)\n    s.mux.HandleFunc(\"/api/battle/auto/start\", s.handleBattleAutoStart)\n    s.mux.HandleFunc(\"/api/\", s.handleAPINotFound)\n    s.mux.HandleFunc(\"/\", s.handleStatic)\n}"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "战斗状态建模"
+    },
+    {
+      "type": "paragraph",
+      "text": "战斗模块不是把 UI 上看到的血条存一下。它从协议包建立状态：2503 是开局和双方阵容快照，2505 是技能回合结果，2506 是战斗结束，2595 是战斗效果面板。每种包先进 packets parser，再转成 battle.Session 里的结构。"
+    },
+    {
+      "type": "code",
+      "language": "go",
+      "filename": "internal/battle/service.go",
+      "code": "type Service struct {\n    Session *Session\n}\n\nfunc NewService() *Service {\n    return &Service{Session: NewSession()}\n}\n\nfunc (s *Service) ApplyReadyPacket(packet packets.FightNoteReady2503, selfUserID uint32) ReadyState {\n    ready := ReadyStateFrom2503(packet, selfUserID)\n    s.Session.ApplyReady(ready)\n    return ready\n}\n\nfunc (s *Service) ApplySkillPacket(packet packets.FightNoteUseSkill2505) SkillTurn {\n    turn := SkillTurnFrom2505(packet)\n    s.Session.ApplySkillTurn(turn)\n    return turn\n}\n\nfunc (s *Service) ApplyFightOverPacket(packet packets.FightOver2506) FightOver {\n    over := FightOverFrom2506(packet)\n    s.Session.ApplyFightOver(over)\n    return over\n}"
+    },
+    {
+      "type": "paragraph",
+      "text": "ReadyStateFrom2503 负责把原始 ready packet 转成领域模型，并根据 selfUserID 区分我方和对方。这个步骤之后，后续策略不需要关心原始 offset 和 body 字节布局。"
+    },
+    {
+      "type": "code",
+      "language": "go",
+      "filename": "internal/battle/packet_adapter.go",
+      "code": "func ReadyStateFrom2503(packet packets.FightNoteReady2503, selfUserID uint32) ReadyState {\n    ready := ReadyState{\n        Mode:        packet.Mode,\n        EFFightType: packet.EFFightType,\n        SelfUserID:  selfUserID,\n        MyIndex:     -1,\n        RivalIndex:  -1,\n        Fighters:    make([]ReadyFighter, 0, len(packet.Fighters)),\n    }\n\n    for i, fighter := range packet.Fighters {\n        isRival := fighter.UserID != selfUserID\n        modelFighter := readyFighterFrom2503(fighter, isRival)\n        if fighter.UserID == selfUserID {\n            ready.MyIndex = i\n        } else {\n            ready.RivalIndex = i\n        }\n        ready.Fighters = append(ready.Fighters, modelFighter)\n    }\n    return ready\n}"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "策略需要的局面信息"
+    },
+    {
+      "type": "paragraph",
+      "text": "自动战斗不能直接拿“当前血量”做判断。它需要知道当前阶段、是否可行动、是否必须强制换宠、技能是否可用、触发原因、我方/对方在场精灵、后备精灵、状态效果和上一回合结果。代码里的 DecisionContext 就是把这些信息整理成策略输入。"
+    },
+    {
+      "type": "code",
+      "language": "go",
+      "filename": "internal/battle/decision_context.go",
+      "code": "type DecisionContext struct {\n    Phase                 Phase\n    Mode                  uint32\n    SelfUserID            uint32\n    RivalUserID           uint32\n    TurnCount             uint32\n    CanAct                bool\n    CanUseSkill           bool\n    CanChangePet          bool\n    NeedsForcedSwitch     bool\n    ForcedSwitchCatchTime uint32\n    Trigger               DecisionTrigger\n\n    Self  DecisionFighterContext\n    Rival DecisionFighterContext\n\n    Conditions    DecisionConditionSnapshot\n    BP            *BPState\n    LastEntry     *EntryEvent\n    LastOutcome   *BattleOutcome\n    LastSkillTurn *SkillTurn\n}\n\nfunc BuildDecisionContext(session *Session, canAct bool) DecisionContext {\n    ctx := DecisionContext{CanAct: canAct}\n    if session == nil || session.Ready == nil {\n        return ctx\n    }\n\n    ready := session.Ready\n    ctx.Mode = ready.Mode\n    ctx.SelfUserID = ready.SelfUserID\n    ctx.TurnCount = session.TurnCount\n    ctx.ForcedSwitchCatchTime = session.ForcedSwitchCatchTime(ctx.Self.UserID)\n    ctx.NeedsForcedSwitch = ctx.Self.Active.CatchTime != 0 &&\n        (ctx.Self.Active.CurrentHP == 0 || ctx.ForcedSwitchCatchTime != 0) &&\n        session.Phase != PhaseFinished\n    ctx.CanUseSkill = canAct && !ctx.NeedsForcedSwitch && ctx.Self.Active.Alive && hasUsableDecisionSkill(ctx.Self.Active.Skills)\n    ctx.CanChangePet = canAct && canChangeDecisionPet(ctx.Self.Team, ctx.Self.Active.CatchTime, ctx.ForcedSwitchCatchTime)\n    ctx.Trigger = decisionTrigger(ctx)\n    ctx.Conditions = decisionConditions(ctx)\n    return ctx\n}"
+    },
+    {
+      "type": "paragraph",
+      "text": "策略层的重点不是让结果看起来“很会玩”，而是先把什么能做、什么不能做说清楚。比如必须强制换宠时，出招动作就不应该进入可执行候选。"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "策略预览与执行"
+    },
+    {
+      "type": "paragraph",
+      "text": "PVP 策略库会先根据当前局面生成预览结果：推荐什么动作、为什么推荐、是否能自动执行。执行前还会做二次检查，不能因为策略脚本写了一个动作就直接发包。"
+    },
+    {
+      "type": "code",
+      "language": "go",
+      "filename": "internal/webapi/pvp_strategy_decision.go",
+      "code": "func (s *Server) previewBattleStrategyDecisionForRuntime(\n    ctx context.Context,\n    runtime *BattleRuntime,\n    instance *ConnectionInstance,\n) (battleStrategyDecision, error) {\n    if runtime == nil {\n        return battleStrategyDecision{}, fmt.Errorf(\"battle runtime is not initialized\")\n    }\n    decision, err := runtime.DecisionContext()\n    if err != nil {\n        return battleStrategyDecision{}, err\n    }\n    decision = s.enrichDecisionContext(ctx, decision)\n    executionState := runtime.StrategyExecutionState()\n    result := battleStrategyDecision{\n        Context: decision,\n        Preview: pvpstrategy.PreviewWithExecutionState(\n            decision,\n            s.runtimePolicyForDecisionForInstance(instance, decision),\n            executionState,\n        ),\n        Settings: runtime.Settings(),\n    }\n    return withAutoBattleControlItemFallback(result), nil\n}"
+    },
+    {
+      "type": "code",
+      "language": "go",
+      "filename": "internal/pvpstrategy/evaluator.go",
+      "code": "func evaluateSkillAction(ctx battle.DecisionContext, plan ActionPlan, action ActionToken, skillID uint32) (*ActionDecision, string) {\n    if skillID == 0 {\n        return nil, \"技能 ID 为空\"\n    }\n    if !ctx.CanAct {\n        return nil, \"当前还不能行动\"\n    }\n    if ctx.NeedsForcedSwitch {\n        return nil, \"当前必须先换宠，不能出招\"\n    }\n    if !ctx.Self.Active.Alive {\n        return nil, \"我方当前精灵已死亡\"\n    }\n    skill, ok := findSkill(ctx.Self.Active.Skills, skillID)\n    if !ok {\n        return nil, fmt.Sprintf(\"当前技能栏没有技能 %d\", skillID)\n    }\n    if !skill.Usable {\n        return nil, skill.UnavailableReason\n    }\n    return &ActionDecision{\n        Action:     action,\n        PlanID:     plan.ID,\n        Reason:     fmt.Sprintf(\"技能 %d 当前可用\", skillID),\n        SkillID:    skillID,\n        Executable: true,\n    }, \"\"\n}"
+    },
+    {
+      "type": "paragraph",
+      "text": "页面里看到的“策略预览”和“下一步建议”，背后不是写死文案，而是由战斗状态服务整理当前局面，策略库匹配计划，再经过可执行性检查得到的结果。"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "强化学习接入预留"
+    },
+    {
+      "type": "paragraph",
+      "text": "强化学习不会直接接管发包。现有结构已经把 RL 需要的几件事拆出来了：DecisionContext 提供局面信息，pvpstrategy 作为可读的规则基线，BattleRecord 和 packet audit 负责保存对战记录，BattleActionService 仍然是唯一执行动作的地方。模型只负责给建议，动作必须经过合法动作检查和安全检查。"
+    },
+    {
+      "type": "code",
+      "language": "text",
+      "filename": "future-rl-flow.txt",
+      "code": "服务端包 2503 / 2407 / 2505 / 2595 / 2506\n  -> battle.Session 按真实包序更新状态\n  -> DecisionContext 生成 s_k：行动前局面、可行动窗口、双方状态、技能可用性\n  -> battleai.Observation + ActionMask：合法动作、强制换宠、可用技能、可换后备\n  -> RuleAgent / BehaviorCloneAgent / RankingAgent / RLAgent 给出候选动作\n  -> 决策网关过滤非法动作与低置信度动作\n  -> BattleActionService 发送 2405 / 2406 / 2407\n  -> 2505 / 2595 / 2506 进入 settlement、post_state、reward\n  -> transition 写入训练数据与回放记录"
+    },
+    {
+      "type": "paragraph",
+      "text": "最关键的是时间切片：s_k 只能包含动作发出前已经知道的状态，2505 结算结果不能提前混进 observation。否则模型会在训练时“偷看答案”。因此数据导出会把 decision、raw_packet_event、protocol_event、settlement_result、post_state 和 terminal 分开保存。"
+    },
+    {
+      "type": "code",
+      "language": "json",
+      "filename": "transition-schema-preview.json",
+      "code": "{\n  \"episodeId\": \"battle_20260604_001\",\n  \"step\": 3,\n  \"s\": \"DecisionContext before action\",\n  \"actionMask\": {\n    \"canUseSkill\": true,\n    \"usableSkillIds\": [38019, 15005],\n    \"canChangePet\": true,\n    \"aliveBenchCatchTimes\": [100221, 100337]\n  },\n  \"a\": {\n    \"kind\": \"use_skill\",\n    \"skillId\": 38019\n  },\n  \"settlement\": \"2505 result after action\",\n  \"sNext\": \"state after 2407/2505/2595 applied\",\n  \"rewardParts\": {\n    \"terminal\": 0,\n    \"hpDelta\": 4.0,\n    \"controlApplied\": 0,\n    \"invalidActionPenalty\": 0\n  },\n  \"done\": false,\n  \"sourcePolicy\": \"pvpstrategy:rule-agent\",\n  \"labelQuality\": \"weak_or_curated\"\n}"
+    },
+    {
+      "type": "list",
+      "items": [
+        "第一步不是在线探索，而是把现有战斗记录导出为 transitions.jsonl，先做离线评估。",
+        "PVP 初期会先只给建议、不接管操作，真实出招仍由现有策略执行。",
+        "行为克隆或动作排序会先学会在合法动作集合里排序，不生成不存在的技能或 catchTime。",
+        "真正自动执行前必须经过 action mask、置信度阈值和 fallback；低置信度回退到安全过滤后的规则策略。",
+        "reward 只用于训练和评估，不替代业务规则；执行层仍然只认 BattleActionService。"
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "日常任务怎么跑"
+    },
+    {
+      "type": "paragraph",
+      "text": "日常任务模块同样不把流程写成一堆按钮点击。每个任务有 ID、分类、参数、步骤、是否使用 PVE、是否已验证；执行时会记录检查点，支持运行中取消，并区分 skipped、failed、stopped、sent 等状态。"
+    },
+    {
+      "type": "code",
+      "language": "go",
+      "filename": "internal/daily/registry.go",
+      "code": "var registeredTasks = []Task{\n    {\n        ID:          \"beast_power\",\n        Name:        \"神兽之威\",\n        Category:    CategoryUnity,\n        UsesPVE:     true,\n        Verified:    false,\n        StatusLabel: \"未验证\",\n        Summary:     \"困难难度挑战流程，使用所选 PVE 战斗方案执行。\",\n        Parameters: []Parameter{\n            battlePresetParam(),\n            difficultyParam(),\n            fixedEncourageParam(\"no\", \"关闭\"),\n        },\n        Steps: []string{\n            \"读取任务状态\",\n            \"如绑定账号配置，先记录并替换当前配置\",\n            \"应用所选 PVE 配置\",\n            \"进入战斗并按出招方案行动\",\n            \"根据完成状态停止或继续\",\n            \"恢复原配置\",\n        },\n    },\n}"
+    },
+    {
+      "type": "code",
+      "language": "go",
+      "filename": "internal/daily/service.go",
+      "code": "func (s Service) execute(client Client, opts ExecuteOptions) (ExecuteResult, error) {\n    ctx := opts.Context\n    if ctx == nil {\n        ctx = context.Background()\n    }\n    task, err := FindTask(opts.TaskID)\n    if err != nil {\n        return ExecuteResult{}, err\n    }\n\n    result := ExecuteResult{\n        TaskID:    task.ID,\n        TaskName:  task.Name,\n        Status:    \"running\",\n        Verified:  task.Verified,\n        StartedAt: now(),\n        progress:  opts.Progress,\n    }\n    result.Checkpoint(\"开始执行\")\n\n    if task.UsesPVE {\n        result, err = s.executePVEDailyScaffold(ctx, task, result, opts)\n    } else {\n        switch task.ID {\n        case \"friendship_star_gift\":\n            result, err = s.executeFriendship(ctx, client, result, timeout)\n        case \"six_realm_palace_sweep\":\n            result, err = s.executeSixRealm(ctx, client, result, opts.Params, timeout)\n        default:\n            err = fmt.Errorf(\"daily task executor not implemented: %s\", task.ID)\n        }\n    }\n\n    result.EndedAt = now()\n    return result, err\n}"
+    },
+    {
+      "type": "paragraph",
+      "text": "这个结构的好处是每个任务都可以先进入可配置、可展示、可记录的状态，再逐步把已验证的发包流程接进去。未验证任务不会伪装成已完成，页面和日志都能看见真实状态。"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "Vue 页面"
+    },
+    {
+      "type": "paragraph",
+      "text": "前端使用 Vue、Pinia 和 Element Plus。它不是静态看板，而是持续拉取后端状态，并且按 activeInstanceId 隔离不同连接实例的数据。战斗请求还做了串行队列，避免连续点击或轮询把同一个实例的战斗动作打乱。"
+    },
+    {
+      "type": "code",
+      "language": "ts",
+      "filename": "web/src/stores/battle.ts",
+      "code": "const battleRequestQueues = new Map<string, Promise<void>>();\n\nasync function runSerializedBattleRequest<T>(instanceId: string, task: () => Promise<T>): Promise<T> {\n  const key = instanceId || 'default';\n  const previous = battleRequestQueues.get(key) ?? Promise.resolve();\n  let release!: () => void;\n  const current = new Promise<void>((resolve) => {\n    release = resolve;\n  });\n  const queued = previous.catch(() => undefined).then(() => current);\n  battleRequestQueues.set(key, queued);\n  await previous.catch(() => undefined);\n  try {\n    return await task();\n  } finally {\n    release();\n    if (battleRequestQueues.get(key) === queued) {\n      battleRequestQueues.delete(key);\n    }\n  }\n}"
+    },
+    {
+      "type": "code",
+      "language": "ts",
+      "filename": "web/src/stores/instances.ts",
+      "code": "export const useConnectionInstancesStore = defineStore('connectionInstances', {\n  state: () => ({\n    toolUserId: 'local',\n    defaultInstanceId: 'default',\n    activeInstanceId: loadStoredActiveInstanceId('local'),\n    instances: [] as ConnectionInstanceDTO[],\n    loading: false,\n    operating: false,\n    error: '',\n  }),\n  getters: {\n    activeInstance: (state): ConnectionInstanceDTO | null =>\n      state.instances.find((instance) => instance.id === state.activeInstanceId) ??\n      state.instances.find((instance) => instance.id === state.defaultInstanceId) ??\n      state.instances[0] ??\n      null,\n  },\n  actions: {\n    setActive(instanceId: string) {\n      const nextID = instanceId || this.defaultInstanceId || 'default';\n      this.activeInstanceId = nextID;\n      storeActiveInstanceId(this.toolUserId, nextID);\n    },\n  },\n});"
+    },
+    {
+      "type": "paragraph",
+      "text": "页面上能看到的背包培养、账号资源、战斗、PVP 策略库、日常任务、日志和服务检查，都只是操作按钮。真正让它能稳定跑起来的，是前后端都按同一套实例状态和 DTO 来读写。"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "一些工程取舍"
+    },
+    {
+      "type": "paragraph",
+      "text": "这个项目没有把功能堆到页面上，而是把不稳定的外部协议拆成能读、能测、出错后能恢复的几层。协议读取要考虑错位恢复，命令等待要考虑 pending 和超时，战斗策略要先拿到可靠的局面信息，日常任务要区分已验证和未验证流程，Web API 也要给多账号留出空间。"
+    },
+    {
+      "type": "list",
+      "items": [
+        "Go 侧：TCP 协议、二进制解析、超时控制、账号实例隔离、战斗状态、任务执行、单元测试。",
+        "前端侧：Vue + Pinia 状态管理、实例切换、轮询与操作串行化、复杂页面布局。",
+        "工程侧：从抓包记录整理出协议模型，把脚本经验转成可以反复测试的服务能力，不用兼容分支掩盖脏状态。",
+        "AI/RL 侧：已经把 observation、action mask、策略基线、执行器和回放记录拆开，后续能接行为克隆、动作排序和强化学习。",
+        "页面侧：操作面板只呈现当前系统真实状态，不用静态说明替代运行结果。"
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "后面还想做什么"
+    },
+    {
+      "type": "list",
+      "items": [
+        "继续把日常任务从框架代码推进到更多已验证发包流程，并保留执行证据。",
+        "完善战斗录像和 packet audit 的导出，让策略错误能回放定位。",
+        "把默认实例扩展成更完整的账号选择和实例复用。",
+        "给 PVP 策略增加更清晰的说明：命中的规则、被拒绝的动作、兜底策略触发原因。",
+        "新增 battleai 数据导出，把当前局面转成 observation、合法动作集合和训练样本，为强化学习和 Agent 只观察不接管的模式准备数据。"
+      ]
+    }
+  ]
+}
