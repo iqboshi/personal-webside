@@ -1,8 +1,8 @@
 # 张孟庆个人主页
 
 Go 后端 + Vue 3 + Element Plus 前端的个人主页，用来记录项目、文章和最近在读内容。
-项目文章由 Go 后端从本地 SQLite 数据库读取，首次启动会自动创建 `data/homepage.db`，并把 `content/articles/*.json` 同步进数据库。
-项目正文使用 `blocks_json` 存储富文本块，支持段落、列表、代码块、图片/GIF 和链接卡片。
+主页资料、联系方式、最近在读、统计卡片、导航文案和项目文章都由 Go API 从数据库读取；管理员登录后可以在网页里的“内容管理”面板直接修改 JSON 并保存，不需要改代码。
+项目文章使用富文本块存储，支持段落、列表、代码块、图片/GIF 和链接卡片。
 签到日历、每日 Todo 和每日笔记由 Go API 写入数据库；访客只能查看，管理员登录后才能维护 Todo、完成任务、签到和编辑笔记。未配置 `DATABASE_URL` 时使用本地 SQLite，配置后会写入 Supabase Postgres。
 每日 Todo 全部完成后才会解锁当天签到；已经存在的历史签到不会因为新增 Todo 规则失效。
 
@@ -53,7 +53,18 @@ $env:SESSION_SECRET = "一段足够长的随机字符串"
 go run ./cmd/server
 ```
 
-## 添加项目文章
+## 管理网站内容
+
+启动后端并登录管理员后，右侧签到卡片会出现“内容管理”按钮。
+
+内容管理面板分两块：
+
+- `Profile JSON`：主页个人资料、联系方式、在线作品、最近在读、统计卡片、标签标题和按钮文案。
+- `Articles JSON`：所有项目文章。每篇文章包含 `slug`、`category`、`date`、`title`、`excerpt`、`tags` 和 `blocks`。
+
+保存后内容会写入数据库的 `site_content` 表。线上配置 `DATABASE_URL` 后会写入 Supabase Postgres，本地未配置时写入 `data/homepage.db`。
+
+## 添加项目文章默认内容
 
 新增项目时，在 `content/articles` 里新增一个 `.json` 文件即可。文件名建议带排序前缀，例如：
 
@@ -81,7 +92,7 @@ content/articles/
 }
 ```
 
-后端启动时会读取这些文件，内容变化后自动覆盖同步到 SQLite；前端仍然只通过 `/api/articles` 和 `/api/articles/{slug}` 读取数据库。
+这些文件只作为首次初始化数据库的默认内容。数据库里已经存在 `site_content` 后，后端会优先使用数据库内容，避免你在线上管理面板改过的文章被代码文件覆盖。
 
 启动前端开发服务：
 
@@ -121,7 +132,7 @@ https://personal-webside-api.onrender.com
 VITE_API_BASE_URL=https://personal-webside-api.onrender.com
 ```
 
-然后重新运行 `Deploy Pages` 工作流，线上 Pages 就会把 `/api/checkins`、`/api/todos/today`、`/api/admin/login`、`/api/admin/checkins/{date}`、`/api/admin/todos/*` 请求发到这个 Go API。
+然后重新运行 `Deploy Pages` 工作流，线上 Pages 就会把 `/api/profile`、`/api/articles`、`/api/admin/content`、`/api/checkins`、`/api/todos/today`、`/api/admin/login`、`/api/admin/checkins/{date}`、`/api/admin/todos/*` 请求发到这个 Go API。
 
 ## Go API 部署环境变量
 
@@ -137,7 +148,7 @@ CONTENT_DIR=/app/content/articles
 CORS_ALLOWED_ORIGINS=https://iqboshi.github.io
 ```
 
-`DATABASE_URL` 用来保存签到、每日 Todo 和每日笔记。文章数据库目前仍使用 SQLite，所以如果使用 Dockerfile 部署，建议把持久盘挂载到 `/app/data`，这样 `homepage.db` 才不会在重启或重新部署后丢失。
+`DATABASE_URL` 用来保存主页内容、项目文章、签到、每日 Todo 和每日笔记。未配置时会使用本地 SQLite，所以如果使用 Dockerfile 部署且不接 Supabase，建议把持久盘挂载到 `/app/data`，这样 `homepage.db` 才不会在重启或重新部署后丢失。
 
 Supabase 的建表 SQL 在 `supabase/checkins.sql`。后端启动时也会自动创建这些表。
 

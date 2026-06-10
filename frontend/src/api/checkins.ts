@@ -1,4 +1,4 @@
-import type { AdminSession, Checkin, TodoDayStatus, TodoTaskDraft } from '../types'
+import type { AdminSession, Article, Checkin, SiteContent, SiteData, TodoDayStatus, TodoTaskDraft } from '../types'
 import { requestJSON } from './request'
 
 const ADMIN_TOKEN_KEY = 'mengqing-homepage-admin-token'
@@ -65,6 +65,20 @@ export function setTodoCompletion(date: string, taskId: string, done: boolean): 
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify({ date, taskId, done }),
+  })
+}
+
+export function fetchAdminContent(): Promise<SiteContent> {
+  return requestJSON<SiteContent>('/api/admin/content', {
+    headers: authHeaders(),
+  })
+}
+
+export function saveAdminContent(profile: SiteData, articles: Article[]): Promise<SiteContent> {
+  return requestJSON<SiteContent>('/api/admin/content', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ profile, articles }),
   })
 }
 

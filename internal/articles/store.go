@@ -179,6 +179,10 @@ func normalizeArticle(article *Article) error {
 	return nil
 }
 
+func Normalize(article *Article) error {
+	return normalizeArticle(article)
+}
+
 func normalizeBlock(block *ArticleBlock) {
 	block.Type = strings.TrimSpace(block.Type)
 	block.Text = strings.TrimSpace(block.Text)

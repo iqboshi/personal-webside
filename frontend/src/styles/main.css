@@ -1090,6 +1090,41 @@ a {
   cursor: pointer;
 }
 
+.content-manage-button {
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 30px;
+  border: 1px solid rgba(67, 133, 255, 0.18);
+  border-radius: 999px;
+  color: var(--blue);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.72), rgba(239, 246, 255, 0.62)),
+    rgba(255, 255, 255, 0.5);
+  box-shadow:
+    0 8px 18px rgba(67, 133, 255, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.82);
+  font-size: 12px;
+  font-weight: 900;
+  white-space: nowrap;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
+}
+
+.content-manage-button:hover {
+  border-color: rgba(67, 133, 255, 0.28);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.86), rgba(239, 246, 255, 0.8)),
+    rgba(255, 255, 255, 0.72);
+  box-shadow:
+    0 12px 24px rgba(67, 133, 255, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.86);
+  transform: translateY(-1px);
+}
+
 .todo-card {
   position: relative;
   overflow: hidden;
@@ -1723,6 +1758,70 @@ a {
   display: grid;
   gap: 12px;
   max-width: 460px;
+}
+
+.content-editor {
+  display: grid;
+  gap: 12px;
+  width: min(1040px, calc(100vw - 28px));
+  max-height: calc(100vh - 42px);
+}
+
+.content-editor-tip {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.content-editor-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  min-height: 0;
+}
+
+.content-editor-grid label {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.content-editor-grid label > span {
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.content-editor-grid textarea {
+  width: 100%;
+  height: min(58vh, 560px);
+  min-height: 320px;
+  resize: vertical;
+  padding: 13px;
+  border: 1px solid rgba(126, 164, 205, 0.24);
+  border-radius: 12px;
+  color: #26384d;
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.76),
+    0 12px 26px rgba(57, 85, 120, 0.08);
+  font: 12px/1.58 "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+  outline: none;
+  white-space: pre;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.content-editor-grid textarea:focus {
+  border-color: rgba(67, 133, 255, 0.46);
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow:
+    0 0 0 3px rgba(67, 133, 255, 0.1),
+    0 14px 28px rgba(67, 133, 255, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.82);
 }
 
 .todo-draft-list {
@@ -2495,6 +2594,20 @@ a {
 
   .reader-hero h1 {
     font-size: 30px;
+  }
+
+  .content-editor {
+    width: min(100%, calc(100vw - 24px));
+    max-height: calc(100vh - 24px);
+  }
+
+  .content-editor-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .content-editor-grid textarea {
+    height: 38vh;
+    min-height: 240px;
   }
 
 }

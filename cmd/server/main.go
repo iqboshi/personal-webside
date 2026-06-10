@@ -21,6 +21,7 @@ import (
 	"personal_webside/internal/articles"
 	"personal_webside/internal/checkins"
 	"personal_webside/internal/profile"
+	"personal_webside/internal/sitecontent"
 	"personal_webside/internal/todos"
 )
 
@@ -37,14 +38,19 @@ func main() {
 	contentDir := flag.String("content", envOrDefault("CONTENT_DIR", "content/articles"), "article content directory")
 	flag.Parse()
 
-	articleStore, err := articles.Open(*dbPath)
+	defaultArticles, _, err := articles.LoadContentDir(*contentDir)
 	if err != nil {
-		log.Fatalf("open article database: %v", err)
+		log.Fatalf("load default article content: %v", err)
 	}
-	defer articleStore.Close()
 
-	if err := articleStore.SyncContentDir(context.Background(), *contentDir); err != nil {
-		log.Fatalf("sync article content: %v", err)
+	contentStore, err := sitecontent.OpenFromEnv(*dbPath)
+	if err != nil {
+		log.Fatalf("open site content database: %v", err)
+	}
+	defer contentStore.Close()
+
+	if err := contentStore.EnsureDefaults(context.Background(), profile.Data(), defaultArticles); err != nil {
+		log.Fatalf("initialize site content: %v", err)
 	}
 
 	checkinStore, err := checkins.OpenFromEnv(*dbPath)
@@ -64,14 +70,15 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/health", cors.wrap(handleHealth))
-	mux.HandleFunc("/api/profile", cors.wrap(handleProfile))
-	mux.HandleFunc("/api/articles", cors.wrap(handleArticles(articleStore)))
-	mux.HandleFunc("/api/articles/", cors.wrap(handleArticle(articleStore)))
+	mux.HandleFunc("/api/profile", cors.wrap(handleProfile(contentStore)))
+	mux.HandleFunc("/api/articles", cors.wrap(handleArticles(contentStore)))
+	mux.HandleFunc("/api/articles/", cors.wrap(handleArticle(contentStore)))
 	mux.HandleFunc("/api/checkins", cors.wrap(handleCheckins(checkinStore)))
 	mux.HandleFunc("/api/todos/today", cors.wrap(handleTodayTodos(todoStore)))
 	mux.HandleFunc("/api/admin/session", cors.wrap(auth.handleSession))
 	mux.HandleFunc("/api/admin/login", cors.wrap(auth.handleLogin))
 	mux.HandleFunc("/api/admin/logout", cors.wrap(auth.handleLogout))
+	mux.HandleFunc("/api/admin/content", cors.wrap(auth.requireAdmin(handleAdminContent(contentStore))))
 	mux.HandleFunc("/api/admin/checkins/", cors.wrap(auth.requireAdmin(handleAdminCheckin(checkinStore, todoStore))))
 	mux.HandleFunc("/api/admin/todos/tasks", cors.wrap(auth.requireAdmin(handleAdminTodoTasks(todoStore))))
 	mux.HandleFunc("/api/admin/todos/complete", cors.wrap(auth.requireAdmin(handleAdminTodoCompletion(todoStore))))
@@ -244,6 +251,40 @@ func handleAdminTodoCompletion(store *todos.Store) http.HandlerFunc {
 	}
 }
 
+func handleAdminContent(store *sitecontent.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			content, err := store.Get(r.Context())
+			if err != nil {
+				log.Printf("get site content: %v", err)
+				http.Error(w, "failed to load site content", http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, http.StatusOK, content)
+		case http.MethodPut:
+			var draft sitecontent.Draft
+			if err := readJSONBody(r, &draft, sitecontent.MaxProfileJSONBytes+sitecontent.MaxArticlesJSONBytes+8192); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			if err := store.Save(r.Context(), draft); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			content, err := store.Get(r.Context())
+			if err != nil {
+				log.Printf("get site content after save: %v", err)
+				http.Error(w, "failed to reload site content", http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, http.StatusOK, content)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}
+}
+
 func handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{
 		"status": "ok",
@@ -252,28 +293,41 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func handleProfile(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, profile.Data())
-}
-
-func handleArticles(store *articles.Store) http.HandlerFunc {
+func handleProfile(store *sitecontent.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 
-		items, err := store.List(r.Context())
+		content, err := store.Get(r.Context())
+		if err != nil {
+			log.Printf("get profile content: %v", err)
+			http.Error(w, "failed to load profile", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, content.Profile)
+	}
+}
+
+func handleArticles(store *sitecontent.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		content, err := store.Get(r.Context())
 		if err != nil {
 			log.Printf("list articles: %v", err)
 			http.Error(w, "failed to load articles", http.StatusInternalServerError)
 			return
 		}
-		writeJSON(w, http.StatusOK, items)
+		writeJSON(w, http.StatusOK, content.Articles)
 	}
 }
 
-func handleArticle(store *articles.Store) http.HandlerFunc {
+func handleArticle(store *sitecontent.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -286,18 +340,21 @@ func handleArticle(store *articles.Store) http.HandlerFunc {
 			return
 		}
 
-		item, found, err := store.Get(r.Context(), slug)
+		content, err := store.Get(r.Context())
 		if err != nil {
 			log.Printf("get article %q: %v", slug, err)
 			http.Error(w, "failed to load article", http.StatusInternalServerError)
 			return
 		}
-		if !found {
-			http.NotFound(w, r)
-			return
+
+		for _, item := range content.Articles {
+			if item.Slug == slug {
+				writeJSON(w, http.StatusOK, item)
+				return
+			}
 		}
 
-		writeJSON(w, http.StatusOK, item)
+		http.NotFound(w, r)
 	}
 }
 

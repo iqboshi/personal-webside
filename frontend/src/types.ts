@@ -14,6 +14,9 @@ export interface SiteData {
   techRadar: RadarItem[]
   activity: ActivityDay[]
   serviceStack: StackLayer[]
+  readingLinks: ReadingLink[]
+  labels: SiteLabels
+  uiText: Record<string, string>
 }
 
 export interface Article {
@@ -71,6 +74,7 @@ export interface Contact {
   label: string
   value: string
   href?: string
+  note?: string
 }
 
 export interface NavItem {
@@ -167,6 +171,24 @@ export interface StackLayer {
   items: string[]
 }
 
+export interface ReadingLink {
+  label: string
+  type: string
+  href: string
+  note: string
+}
+
+export interface SiteLabels {
+  brandInitial: string
+  profileGreeting: string
+  articlesEyebrow: string
+  articlesTitle: string
+  tagsEyebrow: string
+  tagsTitle: string
+  readingEyebrow: string
+  readingTitle: string
+}
+
 export interface Signal {
   level: string
   label: string
@@ -207,4 +229,10 @@ export interface AdminSession {
   authenticated: boolean
   username?: string
   token?: string
+}
+
+export interface SiteContent {
+  profile: SiteData
+  articles: Article[]
+  updatedAt: string
 }

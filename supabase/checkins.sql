@@ -20,3 +20,10 @@ CREATE TABLE IF NOT EXISTS todo_completions (
   completed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (date_key, task_id)
 );
+
+CREATE TABLE IF NOT EXISTS site_content (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  profile_json JSONB NOT NULL,
+  articles_json JSONB NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

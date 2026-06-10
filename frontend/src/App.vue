@@ -17,18 +17,20 @@ import hljs from 'highlight.js/lib/common'
 
 import { fetchArticle, fetchArticles } from './api/articles'
 import {
+  fetchAdminContent,
   fetchAdminSession,
   fetchCheckins,
   fetchTodayTodos,
   loginAdmin,
   logoutAdmin,
+  saveAdminContent,
   saveCheckin as saveCheckinEntry,
   saveTodoTasks,
   setTodoCompletion,
 } from './api/checkins'
 import { fetchProfile } from './api/profile'
 import { fallbackProfile } from './data/fallback'
-import type { AdminSession, Article, ArticleBlock, Checkin, Project, SiteData, TodoDayStatus, TodoTaskDraft } from './types'
+import type { AdminSession, Article, ArticleBlock, Checkin, Project, ReadingLink, SiteContent, SiteData, TodoDayStatus, TodoTaskDraft } from './types'
 import { staticAssetPath, stripBasePath, withBasePath } from './url'
 
 interface ClickBubble {
@@ -55,13 +57,6 @@ interface ReaderSection {
   blocks: ArticleBlock[]
 }
 
-interface ReadingLink {
-  label: string
-  type: string
-  href: string
-  note: string
-}
-
 interface ContactAction {
   type: string
   label: string
@@ -86,7 +81,7 @@ const profile = ref<SiteData>(fallbackProfile)
 const articles = ref<Article[]>([])
 const selectedArticle = ref<Article | null>(null)
 const loading = ref(true)
-const activeTopic = ref('全部')
+const activeTopic = ref(fallbackProfile.uiText.allTag)
 const navHidden = ref(false)
 const navFloating = ref(false)
 const openPanel = ref<'contact' | 'works' | null>(null)
@@ -103,6 +98,12 @@ const todoLoading = ref(false)
 const todoSaving = ref(false)
 const todoEditorOpen = ref(false)
 const todoDrafts = ref<TodoTaskDraft[]>([])
+const contentEditorOpen = ref(false)
+const contentEditorLoading = ref(false)
+const contentEditorSaving = ref(false)
+const profileJSONDraft = ref('')
+const articlesJSONDraft = ref('')
+const contentUpdatedAt = ref('')
 const isCheckinDialogOpen = ref(false)
 const isAdminLoginOpen = ref(false)
 const adminLoginLoading = ref(false)
@@ -117,7 +118,13 @@ let scrollTicking = false
 let clickBubbleId = 0
 const clickBubbleTimers: number[] = []
 
-const direction = '深度学习视觉方向，主要使用遥感数据。'
+const labels = computed(() => ({ ...fallbackProfile.labels, ...(profile.value.labels || {}) }))
+const uiText = computed(() => ({ ...fallbackProfile.uiText, ...(profile.value.uiText || {}) }))
+const direction = computed(() => profile.value.hero.headline || fallbackProfile.hero.headline)
+const profileTags = computed(() => {
+  const tags = profile.value.hero.focus?.length ? profile.value.hero.focus : fallbackProfile.hero.focus
+  return tags.slice(0, 4)
+})
 
 const projectLink = computed(() => profile.value.contacts.find((item) => item.type === 'link'))
 const workLinks = computed<WorkLink[]>(() => {
@@ -130,7 +137,7 @@ const workLinks = computed<WorkLink[]>(() => {
   return projectLink.value?.href
     ? [
         {
-          label: projectLink.value.label || '在线作品',
+          label: projectLink.value.label || uiText.value.worksButton,
           href: projectLink.value.href,
           note: projectLink.value.value || '项目入口',
           stack: ['Project'],
@@ -139,65 +146,27 @@ const workLinks = computed<WorkLink[]>(() => {
     : []
 })
 const contactActions = computed<ContactAction[]>(() => {
-  const mail = profile.value.contacts.find((item) => item.type === 'mail')
-  const actions: ContactAction[] = [
-    {
-      type: 'qq',
-      label: 'QQ',
-      value: '2358164625',
-      href: 'https://qm.qq.com/cgi-bin/qm/qr?k=2358164625',
-      note: '点击复制号码',
-    },
-    {
-      type: 'wechat',
-      label: '微信',
-      value: 'a2358164625',
-      note: '点击复制微信号',
-    },
-  ]
-
-  if (mail) {
-    actions.push({
-      type: 'mail',
-      label: mail.label || '邮箱',
-      value: mail.value,
-      href: mail.href || `mailto:${mail.value}`,
-      note: '点击复制邮箱',
-    })
-  }
-
-  return actions
+  return profile.value.contacts
+    .filter((item) => ['qq', 'wechat', 'mail', 'phone'].includes(item.type) && item.value)
+    .map((item) => ({
+      type: item.type,
+      label: item.label,
+      value: item.value,
+      href: item.href || (item.type === 'mail' ? `mailto:${item.value}` : undefined),
+      note: item.note || (item.type === 'mail' ? '点击复制邮箱' : '点击复制'),
+    }))
 })
-const readingLinks: ReadingLink[] = [
-  {
-    label: 'ZYYO/homepage',
-    type: 'GitHub',
-    href: 'https://github.com/ZYYO666/homepage',
-    note: '主页动效与布局参考',
-  },
-  {
-    label: 'iqboshi/platform',
-    type: 'GitHub',
-    href: 'https://github.com/iqboshi/platform',
-    note: '当前项目源码',
-  },
-  {
-    label: 'React Flow Docs',
-    type: 'Docs',
-    href: 'https://reactflow.dev/',
-    note: '流程画布',
-  },
-]
+const readingLinks = computed<ReadingLink[]>(() => profile.value.readingLinks || [])
 
-const siteStats = computed(() => [
-  { label: '在线作品', value: `${workLinks.value.length}` },
-  { label: '项目帖', value: `${articles.value.length}` },
-  { label: '论文', value: '3' },
-  { label: '爱好', value: '编程' },
-])
+const siteStats = computed(() =>
+  profile.value.metrics.slice(0, 4).map((item) => ({
+    label: item.label,
+    value: `${item.value}${item.suffix || ''}`,
+  })),
+)
 
 const filteredArticles = computed(() => {
-  if (activeTopic.value === '全部') return articles.value
+  if (activeTopic.value === uiText.value.allTag || activeTopic.value === '全部') return articles.value
   return articles.value.filter((article) => {
     const source = `${article.category} ${article.title} ${article.excerpt} ${article.tags.join(' ')}`
     return source.toLowerCase().includes(activeTopic.value.toLowerCase())
@@ -654,6 +623,77 @@ async function submitTodoTasks() {
   }
 }
 
+function applySiteContent(content: SiteContent) {
+  const previousAllTag = uiText.value.allTag
+  profile.value = content.profile
+  articles.value = content.articles
+  contentUpdatedAt.value = content.updatedAt
+  if (activeTopic.value === previousAllTag || activeTopic.value === '全部') {
+    activeTopic.value = uiText.value.allTag
+  }
+}
+
+async function openContentEditor() {
+  if (!adminSession.value.authenticated) {
+    isAdminLoginOpen.value = true
+    selectedCheckinDate.value = todayKey
+    isCheckinDialogOpen.value = true
+    ElMessage.warning('请先登录管理员账号')
+    return
+  }
+
+  contentEditorOpen.value = true
+  contentEditorLoading.value = true
+  try {
+    const content = await fetchAdminContent()
+    applySiteContent(content)
+    profileJSONDraft.value = JSON.stringify(content.profile, null, 2)
+    articlesJSONDraft.value = JSON.stringify(content.articles, null, 2)
+  } catch (error) {
+    console.warn(error)
+    profileJSONDraft.value = JSON.stringify(profile.value, null, 2)
+    articlesJSONDraft.value = JSON.stringify(articles.value, null, 2)
+    ElMessage.warning('内容接口暂不可用，已载入当前页面内容')
+  } finally {
+    contentEditorLoading.value = false
+  }
+}
+
+async function submitContentEditor() {
+  if (!adminSession.value.authenticated) {
+    isAdminLoginOpen.value = true
+    return
+  }
+
+  let nextProfile: SiteData
+  let nextArticles: Article[]
+  try {
+    nextProfile = JSON.parse(profileJSONDraft.value) as SiteData
+    nextArticles = JSON.parse(articlesJSONDraft.value) as Article[]
+    if (!Array.isArray(nextArticles)) {
+      throw new Error('articles must be an array')
+    }
+  } catch (error) {
+    console.warn(error)
+    ElMessage.error('JSON 格式不正确')
+    return
+  }
+
+  contentEditorSaving.value = true
+  try {
+    const content = await saveAdminContent(nextProfile, nextArticles)
+    applySiteContent(content)
+    await syncSelectedArticleFromRoute()
+    contentEditorOpen.value = false
+    ElMessage.success('网站内容已保存')
+  } catch (error) {
+    console.warn(error)
+    ElMessage.error('内容保存失败，请检查必填字段和 JSON 结构')
+  } finally {
+    contentEditorSaving.value = false
+  }
+}
+
 async function clearSelectedCheckinNote() {
   if (!canWriteSelectedCheckin.value) {
     if (!adminSession.value.authenticated) isAdminLoginOpen.value = true
@@ -724,7 +764,8 @@ function safeDecode(value: string) {
 }
 
 function setTopic(topic: string) {
-  activeTopic.value = activeTopic.value === topic && topic !== '全部' ? '全部' : topic
+  const allTag = uiText.value.allTag
+  activeTopic.value = activeTopic.value === topic && topic !== allTag ? allTag : topic
 }
 
 function togglePanel(panel: 'contact' | 'works') {
@@ -813,6 +854,9 @@ async function loadInitialData() {
 
   if (profileResult.status === 'fulfilled') {
     profile.value = profileResult.value
+    if (activeTopic.value === fallbackProfile.uiText.allTag) {
+      activeTopic.value = uiText.value.allTag
+    }
   } else {
     console.warn(profileResult.reason)
     ElMessage.warning('资料接口暂不可用，已展示本地默认资料')
@@ -832,6 +876,14 @@ async function loadInitialData() {
 
 function handleKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape') {
+    if (contentEditorOpen.value) {
+      contentEditorOpen.value = false
+      return
+    }
+    if (todoEditorOpen.value) {
+      todoEditorOpen.value = false
+      return
+    }
     if (isCheckinDialogOpen.value) {
       closeCheckinDialog()
       return
@@ -1062,12 +1114,12 @@ onUnmounted(() => {
 
     <header class="site-nav" :class="{ 'nav-hidden': navHidden, 'nav-floating': navFloating }">
       <button class="brand" type="button" @click="scrollToSection('#top')">
-        <span>Z</span>
-        <strong>张孟庆</strong>
+        <span>{{ labels.brandInitial }}</span>
+        <strong>{{ profile.person.name }}</strong>
       </button>
       <nav aria-label="主页导航">
-        <button type="button" @click="scrollToSection('#articles')">项目帖</button>
-        <button type="button" @click="scrollToSection('#garden')">签到</button>
+        <button type="button" @click="scrollToSection('#articles')">{{ labels.articlesTitle }}</button>
+        <button type="button" @click="scrollToSection('#garden')">{{ uiText.checkinTitle }}</button>
         <button type="button" @click="scrollToSection('#about')">关于</button>
       </nav>
     </header>
@@ -1076,14 +1128,11 @@ onUnmounted(() => {
       <aside class="left-rail">
         <section id="about" class="profile-card">
           <img class="initial-mark profile-avatar" :src="avatarSrc" :alt="`${profile.person.name} avatar`" />
-          <p class="hello">Hello, I am</p>
+          <p class="hello">{{ labels.profileGreeting }}</p>
           <h1>{{ profile.person.name }}</h1>
           <p class="direction">{{ direction }}</p>
           <div class="profile-tags">
-            <span>Go</span>
-            <span>Vue</span>
-            <span>视觉</span>
-            <span>PyTorch</span>
+            <span v-for="tag in profileTags" :key="tag">{{ tag }}</span>
           </div>
           <div class="profile-actions">
             <button
@@ -1093,7 +1142,7 @@ onUnmounted(() => {
               @click="togglePanel('contact')"
             >
               <el-icon><Message /></el-icon>
-              <span>联系我</span>
+              <span>{{ uiText.contactButton }}</span>
             </button>
             <button
               class="profile-action-button"
@@ -1103,7 +1152,7 @@ onUnmounted(() => {
               @click="togglePanel('works')"
             >
               <el-icon><Link /></el-icon>
-              <span>在线作品</span>
+              <span>{{ uiText.worksButton }}</span>
             </button>
 
             <Transition name="action-panel">
@@ -1163,8 +1212,8 @@ onUnmounted(() => {
         <section class="reading-card">
           <div class="card-section-heading compact-heading">
             <div>
-              <p class="eyebrow">Reading</p>
-              <h2>最近在读</h2>
+              <p class="eyebrow">{{ labels.readingEyebrow }}</p>
+              <h2>{{ labels.readingTitle }}</h2>
             </div>
             <div class="heading-side">
               <span>{{ readingLinks.length }} 条</span>
@@ -1195,8 +1244,8 @@ onUnmounted(() => {
             >
               <div v-if="index === 0" class="card-section-heading">
                 <div>
-                  <p class="eyebrow">Project Posts</p>
-                  <h2>我的项目</h2>
+                  <p class="eyebrow">{{ labels.articlesEyebrow }}</p>
+                  <h2>{{ labels.articlesTitle }}</h2>
                 </div>
                 <div class="heading-side">
                   <span>{{ filteredArticles.length }} / {{ articles.length }} 篇</span>
@@ -1213,7 +1262,7 @@ onUnmounted(() => {
                   <el-tag v-for="tag in article.tags.slice(0, 4)" :key="tag" size="small">{{ tag }}</el-tag>
                 </div>
                 <span class="card-action">
-                  阅读
+                  {{ uiText.readArticle }}
                   <el-icon><ArrowRight /></el-icon>
                 </span>
               </div>
@@ -1223,16 +1272,16 @@ onUnmounted(() => {
           <div v-else class="empty-state">
             <div class="card-section-heading">
               <div>
-                <p class="eyebrow">Project Posts</p>
-                <h2>我的项目</h2>
+                <p class="eyebrow">{{ labels.articlesEyebrow }}</p>
+                <h2>{{ labels.articlesTitle }}</h2>
               </div>
               <div class="heading-side">
                 <span>0 / {{ articles.length }} 篇</span>
               </div>
             </div>
-            <strong>没有匹配的项目帖</strong>
-            <p>换一个标签，或者先看全部项目。</p>
-            <button type="button" @click="setTopic('全部')">查看全部</button>
+            <strong>{{ uiText.emptyProjectsTitle }}</strong>
+            <p>{{ uiText.emptyProjectsBody }}</p>
+            <button type="button" @click="setTopic(uiText.allTag)">{{ uiText.emptyProjectsAction }}</button>
           </div>
         </section>
       </section>
@@ -1241,8 +1290,8 @@ onUnmounted(() => {
         <section class="mini-card">
           <div class="card-section-heading compact-heading">
             <div>
-              <p class="eyebrow">Tags</p>
-              <h2>标签</h2>
+              <p class="eyebrow">{{ labels.tagsEyebrow }}</p>
+              <h2>{{ labels.tagsTitle }}</h2>
             </div>
             <div class="heading-side">
               <span>{{ allTags.length }} 个</span>
@@ -1251,12 +1300,12 @@ onUnmounted(() => {
           <div class="cloud">
             <button
               class="clear-filter"
-              :class="{ active: activeTopic === '全部' }"
+              :class="{ active: activeTopic === uiText.allTag }"
               type="button"
-              :aria-pressed="activeTopic === '全部'"
-              @click="setTopic('全部')"
+              :aria-pressed="activeTopic === uiText.allTag"
+              @click="setTopic(uiText.allTag)"
             >
-              全部
+              {{ uiText.allTag }}
             </button>
             <button
               v-for="tag in allTags"
@@ -1274,8 +1323,8 @@ onUnmounted(() => {
         <section class="mini-card todo-card" :class="{ done: todoStatus.allDone, loading: todoLoading }">
           <div class="todo-card-head">
             <div>
-              <p class="eyebrow">Daily Todo</p>
-              <h2>每日 Todo</h2>
+              <p class="eyebrow">{{ uiText.todoEyebrow }}</p>
+              <h2>{{ uiText.todoTitle }}</h2>
               <strong>{{ todoUnlockText }}</strong>
             </div>
             <span class="todo-ring" :style="todoRingStyle">
@@ -1299,17 +1348,17 @@ onUnmounted(() => {
               <span>{{ task.title }}</span>
             </button>
           </div>
-          <p v-else class="todo-empty">当前没有每日 Todo。管理员可以设置长期任务。</p>
+          <p v-else class="todo-empty">{{ uiText.todoEmpty }}</p>
           <button class="todo-edit-button" type="button" @click="openTodoEditor">
-            {{ adminSession.authenticated ? '设置每日 Todo' : '登录后设置 Todo' }}
+            {{ adminSession.authenticated ? uiText.todoEditAuthed : uiText.todoEditGuest }}
           </button>
         </section>
 
         <section id="garden" class="mini-card checkin-card">
           <div class="card-section-heading compact-heading">
             <div>
-              <p class="eyebrow">Check-in</p>
-              <h2>签到日历</h2>
+              <p class="eyebrow">{{ uiText.checkinEyebrow }}</p>
+              <h2>{{ uiText.checkinTitle }}</h2>
             </div>
             <div class="heading-side">
               <span>{{ checkinStatusText }}</span>
@@ -1328,20 +1377,24 @@ onUnmounted(() => {
 
           <div class="checkin-overview">
             <div>
-              <span>本月</span>
+              <span>{{ uiText.checkinMonth }}</span>
               <strong>{{ monthlyCheckins }} 天</strong>
             </div>
             <div>
-              <span>连续</span>
+              <span>{{ uiText.checkinStreak }}</span>
               <strong>{{ streakDays }} 天</strong>
             </div>
           </div>
 
           <div class="checkin-admin-line">
-            <span>{{ adminSession.authenticated ? `已登录 ${adminSession.username || 'admin'}` : '只读模式' }}</span>
-            <button v-if="adminSession.authenticated" type="button" @click="handleAdminLogout">退出</button>
-            <button v-else type="button" @click="openAdminLogin">管理员登录</button>
+            <span>{{ adminSession.authenticated ? `已登录 ${adminSession.username || 'admin'}` : uiText.adminReadOnly }}</span>
+            <button v-if="adminSession.authenticated" type="button" @click="handleAdminLogout">{{ uiText.adminLogout }}</button>
+            <button v-else type="button" @click="openAdminLogin">{{ uiText.adminLogin }}</button>
           </div>
+
+          <button v-if="adminSession.authenticated" class="content-manage-button" type="button" @click="openContentEditor">
+            {{ uiText.contentManage }}
+          </button>
 
           <div class="calendar-weekdays" aria-hidden="true">
             <span v-for="weekday in weekdayLabels" :key="weekday">{{ weekday }}</span>
@@ -1463,10 +1516,51 @@ onUnmounted(() => {
       </div>
     </transition>
 
+    <transition name="checkin-dialog">
+      <div v-if="contentEditorOpen" class="checkin-dialog-backdrop" @click.self="contentEditorOpen = false">
+        <section class="checkin-dialog content-editor" role="dialog" aria-modal="true" aria-label="网站内容管理">
+          <button class="checkin-dialog-close" type="button" aria-label="关闭内容管理" @click="contentEditorOpen = false">×</button>
+          <div class="note-editor-head">
+            <div>
+              <span>Site Content</span>
+              <strong>网站内容管理</strong>
+            </div>
+            <small>{{ contentUpdatedAt ? `上次保存 ${contentUpdatedAt}` : '数据库内容' }}</small>
+          </div>
+
+          <p class="content-editor-tip">
+            这里保存的是数据库内容。修改 Profile JSON 可以改主页资料、联系方式、最近在读、标签文案和按钮文案；修改 Articles JSON 可以增删项目帖和富文本块。
+          </p>
+
+          <div class="content-editor-grid" v-loading="contentEditorLoading">
+            <label>
+              <span>Profile JSON</span>
+              <textarea v-model="profileJSONDraft" spellcheck="false"></textarea>
+            </label>
+            <label>
+              <span>Articles JSON</span>
+              <textarea v-model="articlesJSONDraft" spellcheck="false"></textarea>
+            </label>
+          </div>
+
+          <div class="note-editor-actions">
+            <small>保存前会校验 JSON、个人名称、主页标题和每篇文章 slug / 标题 / blocks。</small>
+            <div>
+              <button type="button" @click="openContentEditor">重新载入</button>
+              <button class="checkin-action" type="button" :disabled="contentEditorSaving || contentEditorLoading" @click="submitContentEditor">
+                <el-icon><Check /></el-icon>
+                <span>{{ contentEditorSaving ? '保存中' : '保存网站内容' }}</span>
+              </button>
+            </div>
+          </div>
+        </section>
+      </div>
+    </transition>
+
     <footer class="site-footer">
-      <span>© 2026 {{ profile.person.english }}. Built with Go and Vue.</span>
+      <span>© 2026 {{ profile.person.english }}. {{ uiText.footerBuiltWith }}</span>
       <button type="button" @click="scrollToSection('#top')">
-        回到顶部
+        {{ uiText.backToTop }}
         <el-icon><Star /></el-icon>
       </button>
     </footer>

@@ -1,21 +1,24 @@
 package profile
 
 type SiteData struct {
-	Person       Person         `json:"person"`
-	Hero         Hero           `json:"hero"`
-	Contacts     []Contact      `json:"contacts"`
-	Navigation   []NavItem      `json:"navigation"`
-	Metrics      []Metric       `json:"metrics"`
-	Skills       []SkillGroup   `json:"skills"`
-	Experiences  []Experience   `json:"experiences"`
-	Projects     []Project      `json:"projects"`
-	Research     []ResearchItem `json:"research"`
-	Coding       CodingProfile  `json:"coding"`
-	Reading      []ReadingItem  `json:"reading"`
-	BlogIdeas    []BlogItem     `json:"blogIdeas"`
-	TechRadar    []RadarItem    `json:"techRadar"`
-	Activity     []ActivityDay  `json:"activity"`
-	ServiceStack []StackLayer   `json:"serviceStack"`
+	Person       Person            `json:"person"`
+	Hero         Hero              `json:"hero"`
+	Contacts     []Contact         `json:"contacts"`
+	Navigation   []NavItem         `json:"navigation"`
+	Metrics      []Metric          `json:"metrics"`
+	Skills       []SkillGroup      `json:"skills"`
+	Experiences  []Experience      `json:"experiences"`
+	Projects     []Project         `json:"projects"`
+	Research     []ResearchItem    `json:"research"`
+	Coding       CodingProfile     `json:"coding"`
+	Reading      []ReadingItem     `json:"reading"`
+	BlogIdeas    []BlogItem        `json:"blogIdeas"`
+	TechRadar    []RadarItem       `json:"techRadar"`
+	Activity     []ActivityDay     `json:"activity"`
+	ServiceStack []StackLayer      `json:"serviceStack"`
+	ReadingLinks []ReadingLink     `json:"readingLinks"`
+	Labels       SiteLabels        `json:"labels"`
+	UIText       map[string]string `json:"uiText"`
 }
 
 type Person struct {
@@ -41,6 +44,7 @@ type Contact struct {
 	Label string `json:"label"`
 	Value string `json:"value"`
 	Href  string `json:"href"`
+	Note  string `json:"note,omitempty"`
 }
 
 type NavItem struct {
@@ -137,6 +141,24 @@ type StackLayer struct {
 	Items []string `json:"items"`
 }
 
+type ReadingLink struct {
+	Label string `json:"label"`
+	Type  string `json:"type"`
+	Href  string `json:"href"`
+	Note  string `json:"note"`
+}
+
+type SiteLabels struct {
+	BrandInitial    string `json:"brandInitial"`
+	ProfileGreeting string `json:"profileGreeting"`
+	ArticlesEyebrow string `json:"articlesEyebrow"`
+	ArticlesTitle   string `json:"articlesTitle"`
+	TagsEyebrow     string `json:"tagsEyebrow"`
+	TagsTitle       string `json:"tagsTitle"`
+	ReadingEyebrow  string `json:"readingEyebrow"`
+	ReadingTitle    string `json:"readingTitle"`
+}
+
 type Signal struct {
 	Level     string `json:"level"`
 	Label     string `json:"label"`
@@ -174,8 +196,10 @@ func Data() SiteData {
 			},
 		},
 		Contacts: []Contact{
+			{Type: "qq", Label: "QQ", Value: "2358164625", Note: "点击复制号码"},
+			{Type: "wechat", Label: "微信", Value: "a2358164625", Note: "点击复制微信号"},
 			{Type: "phone", Label: "电话", Value: "18513309077", Href: "tel:18513309077"},
-			{Type: "mail", Label: "邮箱", Value: "zhangmengqing@cau.edu.cn", Href: "mailto:zhangmengqing@cau.edu.cn"},
+			{Type: "mail", Label: "邮箱", Value: "zhangmengqing@cau.edu.cn", Href: "mailto:zhangmengqing@cau.edu.cn", Note: "点击复制邮箱"},
 			{Type: "pin", Label: "城市", Value: "北京 海淀区"},
 			{Type: "link", Label: "遥感数据平台", Value: "iqboshi.github.io/platform", Href: "https://iqboshi.github.io/platform/"},
 		},
@@ -187,10 +211,10 @@ func Data() SiteData {
 			{Label: "阅读", To: "#reading"},
 		},
 		Metrics: []Metric{
-			{Label: "硕士阶段", Value: "2027", Suffix: "届", Note: "中国农业大学 985"},
-			{Label: "科研/工程项目", Value: "3", Suffix: "+", Note: "遥感、病虫害、智慧施肥"},
-			{Label: "央企算法实习", Value: "6", Suffix: "月", Note: "强化学习与 LLM 可视化"},
-			{Label: "在投一作论文", Value: "2", Suffix: "篇", Note: "中科院一区方向"},
+			{Label: "在线作品", Value: "1", Suffix: "", Note: "可在线打开的项目"},
+			{Label: "项目帖", Value: "4", Suffix: "", Note: "项目复盘文章"},
+			{Label: "论文", Value: "3", Suffix: "", Note: "论文与研究记录"},
+			{Label: "爱好", Value: "编程", Suffix: "", Note: "长期兴趣"},
 		},
 		Skills: []SkillGroup{
 			{
@@ -375,6 +399,45 @@ func Data() SiteData {
 			{Name: "Backend", Items: []string{"Go net/http", "JSON API", "Server-Sent Events", "Static SPA hosting"}},
 			{Name: "Frontend", Items: []string{"Vue 3", "Element Plus", "Blog feed layout", "Topic filters"}},
 			{Name: "AI/Data", Items: []string{"PyTorch", "Vision data", "Task validation", "Reasoning visualization"}},
+		},
+		ReadingLinks: []ReadingLink{
+			{Label: "ZYYO/homepage", Type: "GitHub", Href: "https://github.com/ZYYO666/homepage", Note: "主页动效与布局参考"},
+			{Label: "iqboshi/platform", Type: "GitHub", Href: "https://github.com/iqboshi/platform", Note: "当前项目源码"},
+			{Label: "React Flow Docs", Type: "Docs", Href: "https://reactflow.dev/", Note: "流程画布"},
+		},
+		Labels: SiteLabels{
+			BrandInitial:    "Z",
+			ProfileGreeting: "Hello, I am",
+			ArticlesEyebrow: "Project Posts",
+			ArticlesTitle:   "我的项目",
+			TagsEyebrow:     "Tags",
+			TagsTitle:       "标签",
+			ReadingEyebrow:  "Reading",
+			ReadingTitle:    "最近在读",
+		},
+		UIText: map[string]string{
+			"contactButton":       "联系我",
+			"worksButton":         "在线作品",
+			"readArticle":         "阅读",
+			"emptyProjectsTitle":  "没有匹配的项目帖",
+			"emptyProjectsBody":   "换一个标签，或者先看全部项目。",
+			"emptyProjectsAction": "查看全部",
+			"allTag":              "全部",
+			"todoEyebrow":         "Daily Todo",
+			"todoTitle":           "每日 Todo",
+			"todoEmpty":           "当前没有每日 Todo。管理员可以设置长期任务。",
+			"todoEditAuthed":      "设置每日 Todo",
+			"todoEditGuest":       "登录后设置 Todo",
+			"checkinEyebrow":      "Check-in",
+			"checkinTitle":        "签到日历",
+			"checkinMonth":        "本月",
+			"checkinStreak":       "连续",
+			"adminReadOnly":       "只读模式",
+			"adminLogin":          "管理员登录",
+			"adminLogout":         "退出",
+			"contentManage":       "内容管理",
+			"footerBuiltWith":     "Built with Go and Vue.",
+			"backToTop":           "回到顶部",
 		},
 	}
 }
